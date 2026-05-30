@@ -1,0 +1,6 @@
+node_modules/
+.env
+.thread-metadata.json
+.usage-registry.json
+*.log
+gateway-export-*.md
