@@ -55,6 +55,35 @@ loadMetadata();
 client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}!`);
   
+  // Programmatically update Bot Avatar and Server Icon if the generated file is present
+  try {
+    const avatarPath = '/home/andy/.gemini/antigravity-cli/brain/45f9541a-0df7-4353-a9d9-0fbafe91fad4/bot_avatar_1780183327794.png';
+    if (fs.existsSync(avatarPath)) {
+      console.log('Setting bot avatar and guild icon from generated image...');
+      await client.user.setAvatar(avatarPath);
+      console.log('Bot avatar updated successfully.');
+      
+      if (GUILD_ID) {
+        try {
+          const guild = await client.guilds.fetch(GUILD_ID);
+          if (guild) {
+            await guild.setIcon(avatarPath);
+            console.log(`Guild icon for "${guild.name}" updated successfully.`);
+          }
+        } catch (guildErr) {
+          console.warn('Could not update Guild icon (likely missing "Manage Server" bot permissions):', guildErr.message);
+        }
+      }
+      
+      // Rename the file to prevent repeatedly setting it on every single restart
+      const usedPath = avatarPath + '.applied';
+      fs.renameSync(avatarPath, usedPath);
+      console.log('Renamed avatar file to prevent redundant updates.');
+    }
+  } catch (err) {
+    console.error('Failed to set bot/server icons:', err);
+  }
+
   // Register slash commands
   console.log('Registering slash commands...');
   const success = await registerCommands(TOKEN, CLIENT_ID, GUILD_ID);
@@ -274,6 +303,13 @@ async function handleAgentCommand(interaction) {
 
   await interaction.deferReply({ ephemeral: true });
 
+  const guild = interaction.guild;
+  if (!guild) {
+    return interaction.editReply({
+      content: '❌ This command can only be executed within a Discord Server (Guild).'
+    });
+  }
+
   // Basic check on channel support for threads
   const channel = interaction.channel;
   if (!channel || (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildForum)) {
@@ -282,46 +318,68 @@ async function handleAgentCommand(interaction) {
     });
   }
 
+  // Derive project channel name from the directory path
+  const projectDirName = directory.split(/[/\\]/).filter(Boolean).pop() || 'general';
+  const channelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+
+  let targetChannel = channel;
   try {
-    // 1. Initiate thread/post
+    // 1. Find or create the AGENT PROJECTS category
+    let category = guild.channels.cache.find(c => c.name === 'AGENT PROJECTS' && c.type === ChannelType.GuildCategory);
+    if (!category) {
+      try {
+        category = await guild.channels.create({
+          name: 'AGENT PROJECTS',
+          type: ChannelType.GuildCategory
+        });
+      } catch (catErr) {
+        console.warn('Could not create AGENT PROJECTS category:', catErr.message);
+      }
+    }
+
+    // 2. Find or create the project-specific text channel under that category
+    let projectChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
+    if (!projectChannel) {
+      const channelOpts = {
+        name: channelName,
+        type: ChannelType.GuildText,
+        reason: `Auto-provisioned text channel for directory: ${directory}`
+      };
+      if (category) {
+        channelOpts.parent = category.id;
+      }
+      projectChannel = await guild.channels.create(channelOpts);
+      await projectChannel.send(`📁 **Welcome to the Project Channel for \`${projectDirName}\`!**\nAll agent tasks run inside this directory will be spawned as threads here.`);
+    }
+    targetChannel = projectChannel;
+  } catch (chanErr) {
+    console.error('Failed to resolve project channel, falling back to current channel:', chanErr);
+    targetChannel = channel;
+  }
+
+  try {
+    // 1. Initiate thread
     const name = `[${tool}] ${taskPrompt.substring(0, 75)}`.trim();
     let thread;
 
-    if (channel.type === ChannelType.GuildForum) {
-      // Create new Forum Post
-      thread = await channel.threads.create({
-        name,
-        autoArchiveDuration: 1440, // 24 hours of inactivity
-        message: {
-          content: `### 🤖 Task Initiated
-* **Tool:** \`${tool.toUpperCase()}\`
-* **Directory:** \`${directory}\`
-* **Mode:** \`${mode.toUpperCase()}\`
-* **Model:** \`${model || 'Default'}\`
-${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`
-        },
-        reason: `Agent Gateway Start`
-      });
-    } else {
-      // Create new Thread on standard channel
-      thread = await channel.threads.create({
-        name,
-        autoArchiveDuration: 1440,
-        reason: `Agent Gateway Start`
-      });
+    // Create new Thread on the resolved project channel
+    thread = await targetChannel.threads.create({
+      name,
+      autoArchiveDuration: 1440,
+      reason: `Agent Gateway Start`
+    });
 
-      // Send initial task header card
-      await thread.send(`### 🤖 Task Initiated
+    // Send initial task header card
+    await thread.send(`### 🤖 Task Initiated
 * **Tool:** \`${tool.toUpperCase()}\`
 * **Directory:** \`${directory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
 ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
-    }
 
     // 2. Start background task
     await interaction.editReply({
-      content: `✅ Task thread created successfully! Follow progress in: <#${thread.id}>`
+      content: `✅ Task thread created successfully in <#${targetChannel.id}>! Follow progress in: <#${thread.id}>`
     });
 
     await thread.send('⚙️ Spawning process and initiating local sandbox environment...');
@@ -569,7 +627,7 @@ async function handleModelCommand(interaction) {
 // Log registry file for overall token usage statistics
 const USAGE_FILE = path.join(__dirname, '../.usage-registry.json');
 
-function recordUsage(tool, tokens) {
+function recordUsage(tool, threadId, tokens) {
   if (!tokens || isNaN(tokens)) return;
   try {
     let data = [];
@@ -578,6 +636,7 @@ function recordUsage(tool, tokens) {
     }
     data.push({
       timestamp: new Date().toISOString(),
+      threadId,
       tool,
       tokens
     });
@@ -591,32 +650,29 @@ function recordUsage(tool, tokens) {
 async function handleUsageCommand(interaction) {
   await interaction.deferReply();
 
-  const limit = parseInt(process.env.MONTHLY_QUOTA_LIMIT, 10) || 5000000;
-  const resetDay = parseInt(process.env.QUOTA_RESET_DAY, 10) || 1;
+  const threadId = interaction.channelId;
+  const meta = threadMetadata.get(threadId);
 
-  let totalTokens = 0;
-  let agyTokens = 0;
-  let codexTokens = 0;
-
-  // Calculate billing cycle range
-  const now = new Date();
-  const startOfCycle = new Date(now.getFullYear(), now.getMonth(), resetDay);
-  if (now < startOfCycle) {
-    startOfCycle.setMonth(startOfCycle.getMonth() - 1);
-  }
-  
-  const nextReset = new Date(startOfCycle);
-  nextReset.setMonth(nextReset.getMonth() + 1);
+  let threadTokens = 0;
+  let globalTokens = 0;
+  let toolTotals = { agy: 0, codex: 0 };
+  let threadTotalsMap = new Map(); // threadId -> { tool, tokens }
 
   try {
     if (fs.existsSync(USAGE_FILE)) {
       const data = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
       data.forEach(record => {
-        const time = new Date(record.timestamp);
-        if (time >= startOfCycle && time < nextReset) {
-          totalTokens += record.tokens;
-          if (record.tool === 'agy') agyTokens += record.tokens;
-          if (record.tool === 'codex') codexTokens += record.tokens;
+        globalTokens += record.tokens;
+        if (record.tool === 'agy') toolTotals.agy += record.tokens;
+        if (record.tool === 'codex') toolTotals.codex += record.tokens;
+
+        if (record.threadId) {
+          if (record.threadId === threadId) {
+            threadTokens += record.tokens;
+          }
+          const current = threadTotalsMap.get(record.threadId) || { tool: record.tool, tokens: 0 };
+          current.tokens += record.tokens;
+          threadTotalsMap.set(record.threadId, current);
         }
       });
     }
@@ -624,20 +680,37 @@ async function handleUsageCommand(interaction) {
     console.error('Failed to read usage registry:', e);
   }
 
-  const remaining = Math.max(0, limit - totalTokens);
-  const usagePct = ((totalTokens / limit) * 100).toFixed(1);
-  const remainingPct = (100 - parseFloat(usagePct)).toFixed(1);
+  if (meta) {
+    // Inside an active agent task thread: show provider specific info
+    const { getDriver } = require('./drivers');
+    try {
+      const driver = getDriver(meta.tool);
+      const usageCard = driver.getProviderUsageInfo(threadTokens, meta.model);
+      return interaction.editReply(usageCard);
+    } catch (err) {
+      return interaction.editReply(`❌ **Failed to retrieve provider usage details:** ${err.message}`);
+    }
+  } else {
+    // Outside a thread: show a general overview of all active project threads and global totals
+    let overviewText = `### 📊 Global Token Usage Overview\n`;
+    overviewText += `* **Total Tokens Consumed:** \`${globalTokens.toLocaleString()} tokens\`\n`;
+    overviewText += `  * *Antigravity CLI (agy):* \`${toolTotals.agy.toLocaleString()} tokens\`\n`;
+    overviewText += `  * *Codex CLI (codex):* \`${toolTotals.codex.toLocaleString()} tokens\`\n\n`;
 
-  const usageCard = `### 💳 Token Usage & Quota Info
-* **Billing Cycle:** \`${startOfCycle.toLocaleDateString()}\` to \`${nextReset.toLocaleDateString()}\`
-* **Next Reset Date:** \`${nextReset.toLocaleDateString()}\`
-* **Quota Limit:** \`${limit.toLocaleString()} tokens\`
-* **Total Used:** \`${totalTokens.toLocaleString()} tokens\` (\`${usagePct}%\`)
-  * *Antigravity CLI (agy):* \`${agyTokens.toLocaleString()} tokens\`
-  * *Codex CLI (codex):* \`${codexTokens.toLocaleString()} tokens\`
-* **Quota Remaining:** \`${remaining.toLocaleString()} tokens\` (\`${remainingPct}%\`)`;
+    overviewText += `**Active Sessions Usage Breakdown:**\n`;
+    if (threadTotalsMap.size === 0) {
+      overviewText += `* *No logged session usage found in registry.*`;
+    } else {
+      for (const [id, stats] of threadTotalsMap.entries()) {
+        const threadMeta = threadMetadata.get(id);
+        const name = threadMeta ? `[${stats.tool.toUpperCase()}] ${threadMeta.directory.split('/').pop()}` : `Thread #${id}`;
+        overviewText += `* **Channel <#${id}> (${name}):** \`${stats.tokens.toLocaleString()} tokens\`\n`;
+      }
+    }
+    overviewText += `\n*Tip: Run \`/usage\` inside a specific project thread to view detailed model quotas and rate limits.*`;
 
-  await interaction.editReply(usageCard);
+    return interaction.editReply(overviewText);
+  }
 }
 
 // Listen to processManager task ending to record the final conversation turn history
@@ -659,8 +732,8 @@ processManager.on('taskEnded', (task) => {
       const tokenStr = tokenMatch[1].replace(/,/g, '');
       const tokens = parseInt(tokenStr, 10);
       if (!isNaN(tokens)) {
-        recordUsage(task.tool, tokens);
-        console.log(`[Task Ended] Recorded usage: ${tokens} tokens for ${task.tool}.`);
+        recordUsage(task.tool, task.threadId, tokens);
+        console.log(`[Task Ended] Recorded usage: ${tokens} tokens for ${task.tool} in thread ${task.threadId}.`);
       }
     }
   }

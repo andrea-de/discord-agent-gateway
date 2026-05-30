@@ -231,6 +231,11 @@ Time: ${taskContext.startTime.toISOString()}
       try {
         let lastMsg = task.lastLogMessage;
         
+        const authorName = task.tool === 'agy' ? 'Antigravity CLI' : 'Codex CLI';
+        const authorIcon = task.tool === 'agy' 
+          ? 'https://cdn.icon-icons.com/icons2/4335/PNG/512/google_gemini_logo_icon_262842.png'
+          : 'https://cdn.icon-icons.com/icons2/4119/PNG/512/openai_logo_icon_260905.png';
+
         // Attempt to edit last message's embed to append the new text chunk
         if (lastMsg && lastMsg.embeds && lastMsg.embeds.length > 0 &&
             (lastMsg.embeds[0].description.length + chunk.length < maxMsgLength)) {
@@ -243,6 +248,7 @@ Time: ${taskContext.startTime.toISOString()}
           // Send new message with a new embed panel
           const embed = new EmbedBuilder()
             .setColor('#2b2d31') // Premium Slate Gray
+            .setAuthor({ name: authorName, iconURL: authorIcon })
             .setDescription(chunk);
           
           const sentMsg = await task.thread.send({ embeds: [embed] });

@@ -9,6 +9,15 @@ class AgyDriver {
     return false;
   }
 
+  getProviderUsageInfo(threadTokens, modelName) {
+    const model = modelName || 'Gemini 3.5 Flash';
+    return `### ♊ Google Gemini API Usage
+* **Provider Model:** \`${model}\`
+* **Current Thread Usage:** \`${threadTokens.toLocaleString()} tokens\`
+* **Reset Interval:** Rate limits (RPM/TPM) reset every minute. Daily free tier quotas reset at midnight.
+* **Quota Note:** The Google Gemini API is rate-limited on the free tier (15 RPM) and charges by standard consumption on paid tiers.`;
+  }
+
   getArgs({ prompt, mode, isContinue, flags }) {
     let args = [];
     

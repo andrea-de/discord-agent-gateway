@@ -9,6 +9,15 @@ class CodexDriver {
     return true;
   }
 
+  getProviderUsageInfo(threadTokens, modelName) {
+    const model = modelName || 'Default Codex Model';
+    return `### 🧠 OpenAI Codex API Usage
+* **Provider Model:** \`${model}\`
+* **Current Thread Usage:** \`${threadTokens.toLocaleString()} tokens\`
+* **Reset Interval:** Organization billing quotas typically reset monthly. Rate limits (RPM/TPM) reset every minute.
+* **Quota Note:** Credit allocations are managed in your OpenAI developer dashboard.`;
+  }
+
   getArgs({ prompt, mode, isContinue, model, flags }) {
     let args = [];
 
