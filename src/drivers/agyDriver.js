@@ -5,6 +5,10 @@ class AgyDriver {
     return 'agy';
   }
 
+  isInteractive() {
+    return false;
+  }
+
   getArgs({ prompt, mode, isContinue, flags }) {
     let args = [];
     

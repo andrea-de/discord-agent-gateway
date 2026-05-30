@@ -170,8 +170,8 @@ Time: ${taskContext.startTime.toISOString()}
       task.flushedNewContentLength = newContent.length;
     }
 
-    // If YOLO mode, we do not need prompt parsing
-    if (task.mode === 'yolo') {
+    // If YOLO mode or the tool is non-interactive, we do not need prompt parsing
+    if (task.mode === 'yolo' || !task.driver.isInteractive()) {
       return;
     }
 

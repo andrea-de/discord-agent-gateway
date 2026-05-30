@@ -72,7 +72,8 @@ function parsePrompts(text) {
   if (lines.length > 0) {
     const lastLine = lines[lines.length - 1];
     // Check if it ends with prompt indicators but not standard code/paths
-    if (/(\?|>|:|›)\s*$/.test(lastLine) && !lastLine.startsWith('http') && !lastLine.includes('/')) {
+    // Restrict to short lines (< 80 characters) to avoid matching conversational prose questions
+    if (/(\?|>|:|›)\s*$/.test(lastLine) && !lastLine.startsWith('http') && !lastLine.includes('/') && lastLine.length < 80) {
       isAwaitingInput = true;
     }
   }

@@ -5,6 +5,10 @@ class CodexDriver {
     return 'codex';
   }
 
+  isInteractive() {
+    return true;
+  }
+
   getArgs({ prompt, mode, isContinue, model, flags }) {
     let args = [];
 
