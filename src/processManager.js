@@ -2,7 +2,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const { stripAnsi } = require('./parser');
 const { getDriver } = require('./drivers');
 
@@ -195,9 +195,10 @@ Time: ${taskContext.startTime.toISOString()}
     let textToFlush = task.stdoutBuffer;
     task.stdoutBuffer = ''; // Clear buffer
 
-    const maxMsgLength = 1950;
+    // Embed descriptions support up to 4000 characters.
+    const maxMsgLength = 3900; 
 
-    // Split text into chunks that fit Discord's 2000-char message limit
+    // Split text into chunks that fit Discord's limits
     const chunks = [];
     while (textToFlush.length > 0) {
       if (textToFlush.length <= maxMsgLength) {
@@ -205,12 +206,23 @@ Time: ${taskContext.startTime.toISOString()}
         break;
       }
       
-      let splitIndex = textToFlush.lastIndexOf('\n', maxMsgLength);
+      // Attempt to split at a double newline (paragraph/table boundary)
+      let splitIndex = textToFlush.lastIndexOf('\n\n', maxMsgLength);
       if (splitIndex <= 0) {
-        splitIndex = maxMsgLength; // Hard split if no newlines
+        // Fallback to single newline
+        splitIndex = textToFlush.lastIndexOf('\n', maxMsgLength);
       }
+      if (splitIndex <= 0) {
+        // Fallback to space
+        splitIndex = textToFlush.lastIndexOf(' ', maxMsgLength);
+      }
+      if (splitIndex <= 0) {
+        // Hard split if no whitespace at all
+        splitIndex = maxMsgLength;
+      }
+      
       chunks.push(textToFlush.substring(0, splitIndex));
-      textToFlush = textToFlush.substring(splitIndex);
+      textToFlush = textToFlush.substring(splitIndex).replace(/^\n+/, '');
     }
 
     for (const chunk of chunks) {
@@ -219,18 +231,26 @@ Time: ${taskContext.startTime.toISOString()}
       try {
         let lastMsg = task.lastLogMessage;
         
-        // Attempt to edit last message to create a "rolling terminal" effect
-        if (lastMsg && (lastMsg.content.length + chunk.length < maxMsgLength)) {
-          const updatedContent = lastMsg.content + chunk;
-          await lastMsg.edit(updatedContent);
+        // Attempt to edit last message's embed to append the new text chunk
+        if (lastMsg && lastMsg.embeds && lastMsg.embeds.length > 0 &&
+            (lastMsg.embeds[0].description.length + chunk.length < maxMsgLength)) {
+          const updatedContent = lastMsg.embeds[0].description + chunk;
+          const newEmbed = EmbedBuilder.from(lastMsg.embeds[0])
+            .setDescription(updatedContent);
+          
+          await lastMsg.edit({ embeds: [newEmbed] });
         } else {
-          // Send new message if block is full or first time
-          const sentMsg = await task.thread.send(chunk);
+          // Send new message with a new embed panel
+          const embed = new EmbedBuilder()
+            .setColor('#2b2d31') // Premium Slate Gray
+            .setDescription(chunk);
+          
+          const sentMsg = await task.thread.send({ embeds: [embed] });
           task.lastLogMessage = sentMsg;
         }
       } catch (err) {
         console.error('Failed to flush log chunk to Discord:', err);
-        // Fallback: send fresh message
+        // Fallback: send fresh text message if embeds fail
         try {
           const sentMsg = await task.thread.send(chunk);
           task.lastLogMessage = sentMsg;
