@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { stripAnsi, parsePrompts, stripDuplicatePrefix } = require('./parser');
+const { stripAnsi } = require('./parser');
+const { getDriver } = require('./drivers');
 
 class ProcessManager extends EventEmitter {
   constructor() {
@@ -30,7 +31,7 @@ class ProcessManager extends EventEmitter {
   /**
    * Spawns a new agent process for a given Discord thread.
    */
-  async startTask({ thread, tool, directory, mode, prompt, isContinue = false, previousHistoryText = '', model }) {
+  async startTask({ thread, tool, directory, mode, prompt, isContinue = false, previousHistoryText = '', model, flags }) {
     const threadId = thread.id;
     
     // Resolve home directory tilde if present
@@ -59,59 +60,18 @@ class ProcessManager extends EventEmitter {
       }, 500);
     }
 
-    // 2. Prepare command and arguments
-    let cmd = '';
-    let args = [];
+    // Resolve driver
+    const driver = getDriver(tool);
 
-    if (tool === 'agy') {
-      cmd = 'agy';
-      if (mode === 'yolo') {
-        // YOLO Mode: auto-approve
-        args = ['--print', prompt, '--dangerously-skip-permissions'];
-      } else {
-        // Review Mode: default print mode
-        args = ['--print', prompt];
-      }
-      if (isContinue) {
-        args.push('--continue');
-      }
-    } else if (tool === 'codex') {
-      cmd = 'codex';
-      if (isContinue) {
-        // Resume session
-        args = ['resume', '--last', '--no-alt-screen'];
-        if (mode === 'yolo') {
-          args.push('-a', 'never', '--dangerously-bypass-approvals-and-sandbox');
-        } else {
-          args.push('-a', 'untrusted');
-        }
-        if (model) {
-          args.push('-m', model);
-        }
-        args.push(prompt);
-      } else {
-        // Start fresh session
-        args = ['--no-alt-screen'];
-        if (mode === 'yolo') {
-          args.push('-a', 'never', '--dangerously-bypass-approvals-and-sandbox');
-        } else {
-          args.push('-a', 'untrusted');
-        }
-        if (model) {
-          args.push('-m', model);
-        }
-        args.push(prompt);
-      }
-    } else {
-      throw new Error(`Unsupported tool: ${tool}`);
-    }
+    // 2. Prepare command and arguments
+    const cmd = driver.getCommand();
+    const args = driver.getArgs({ prompt, mode, isContinue, model, flags });
 
     // 3. Spawn process
-    const spawnEnv = { ...process.env };
-    if (model) {
-      spawnEnv.GEMINI_MODEL = model;
-      spawnEnv.MODEL = model;
-    }
+    const spawnEnv = { 
+      ...process.env,
+      ...driver.getEnv({ model })
+    };
 
     const child = spawn(cmd, args, {
       cwd: directory,
@@ -131,6 +91,8 @@ class ProcessManager extends EventEmitter {
       mode,
       prompt,
       model,
+      flags,
+      driver,
       process: child,
       startTime: new Date(),
       status: 'RUNNING',
@@ -198,7 +160,7 @@ Time: ${taskContext.startTime.toISOString()}
     task.lastOutputTime = Date.now();
 
     // Compute actual new content since previous turns
-    const newContent = stripDuplicatePrefix(task.previousHistoryText, task.processStdoutAccumulator);
+    const newContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator);
     
     // Extract chunk not yet flushed to Discord
     const flushedLen = task.flushedNewContentLength || 0;
@@ -289,7 +251,7 @@ Time: ${taskContext.startTime.toISOString()}
   async checkForPrompt(task) {
     if (task.status !== 'RUNNING') return;
 
-    const parseResult = parsePrompts(task.promptBuffer);
+    const parseResult = task.driver.parseInteractivePrompts(task.promptBuffer);
     if (!parseResult.isAwaitingInput) return;
 
     // Clear promptBuffer since we've parsed the prompt

@@ -75,7 +75,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'agent') {
+  if (commandName === 'agy' || commandName === 'codex') {
     await handleAgentCommand(interaction);
   } else if (commandName === 'status') {
     await handleStatusCommand(interaction);
@@ -98,7 +98,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'agent') {
+  if (commandName === 'agy' || commandName === 'codex') {
     const focusedOption = interaction.options.getFocused(true);
     if (focusedOption.name === 'directory') {
       const root = process.env.PROJECTS_ROOT;
@@ -251,7 +251,8 @@ client.on('messageCreate', async (message) => {
           prompt: content,
           isContinue: true,
           previousHistoryText: meta.historyText || '',
-          model: meta.model
+          model: meta.model,
+          flags: meta.flags
         });
       } catch (err) {
         await message.channel.send(`❌ **Failed to resume conversation:** ${err.message}`);
@@ -264,11 +265,12 @@ client.on('messageCreate', async (message) => {
  * COMMAND HANDLER: /agent
  */
 async function handleAgentCommand(interaction) {
-  const tool = interaction.options.getString('tool');
+  const tool = interaction.commandName;
   const directory = interaction.options.getString('directory');
   const taskPrompt = interaction.options.getString('task');
   const mode = interaction.options.getString('mode') || 'review';
   const model = interaction.options.getString('model') || null;
+  const flags = interaction.options.getString('flags') || null;
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -296,7 +298,7 @@ async function handleAgentCommand(interaction) {
 * **Directory:** \`${directory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
-* **Prompt:** ${taskPrompt}`
+${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`
         },
         reason: `Agent Gateway Start`
       });
@@ -314,7 +316,7 @@ async function handleAgentCommand(interaction) {
 * **Directory:** \`${directory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
-* **Prompt:** ${taskPrompt}`);
+${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
     }
 
     // 2. Start background task
@@ -330,11 +332,12 @@ async function handleAgentCommand(interaction) {
       directory,
       mode,
       prompt: taskPrompt,
-      model
+      model,
+      flags
     });
 
     // Record thread session metadata for conversation resumption
-    threadMetadata.set(thread.id, { tool, directory, mode, model });
+    threadMetadata.set(thread.id, { tool, directory, mode, model, flags });
     saveMetadata();
 
   } catch (error) {

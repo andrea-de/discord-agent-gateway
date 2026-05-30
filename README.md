@@ -107,20 +107,20 @@ Gateway is ready to receive tasks.
 
 ## 📖 Command Guide & Interaction Flow
 
-### 1. Starting a Task (`/agent`)
-Run the `/agent` command in any Discord channel (works inside Forum channels or standard Text channels).
+### 1. Starting a Task (`/agy` or `/codex`)
+Instead of a generic `/agent` command, you run the slash command for the tool you want to invoke. This exposes optional parameters to configure the execution environment or pass custom flags directly.
 
-* **Syntax:**
-  ```text
-  /agent tool:[agy|codex] directory:[path/to/project] task:[your prompt] mode:[review|yolo]
-  ```
-* **Parameters:**
-  * `tool`: Select `agy` (Antigravity CLI) or `codex` (Codex CLI).
-  * `directory`: Absolute path to a valid local directory (must contain a `.git` folder).
-  * `task`: Instructions or prompt for the agent (e.g. `Fix canvas physics layout issue`).
+* **Commands:**
+  * `/agy`: Spawns a Google Antigravity CLI process.
+  * `/codex`: Spawns an OpenAI Codex CLI process.
+* **Options:**
+  * `directory` (Required): Absolute path to a valid local directory.
+  * `task` (Required): Prompt/instructions for the agent.
   * `mode` (Optional, defaults to `review`):
-    * `review`: Default. Gateway listens to `stdout`, intercepts agent checkpoints/prompts, and formats interactive button panels.
-    * `yolo`: Runs the agents with auto-approve configurations (`--dangerously-skip-permissions` for `agy` and `--ask-for-approval never` for `codex`). Streams outputs continuously, only stopping on crash or task completion.
+    * `review`: Pauses at breakpoints and renders action buttons.
+    * `yolo`: Auto-approves permissions and executes autonomously.
+  * `model` (Optional): Specify a custom LLM model (passed via env variables for `agy` or `-m` for `codex`).
+  * `flags` (Optional): Specify arbitrary space-separated CLI arguments exactly as you would run them locally (e.g. `flags:--sandbox --print-timeout 10m` or `flags:--strict-config`).
 
 ---
 
@@ -133,7 +133,9 @@ When a task starts, the bot generates a dynamic Discord thread (named like `[agy
 
 ---
 
-### 3. Utility Slash Commands (Inside Active Threads)
-* `/status`: Displays elapsed execution time, model quota metrics, active subagents, and memory log locations parsed from active task logs.
-* `/export`: Fetches the entire Discord thread message history and saves a clean Markdown report (`gateway-export-[tool]-[threadId].md`) in your local project workspace.
-* `/kill`: Immediately kills the CLI subprocess (`SIGTERM` -> `SIGKILL`), flushes final logs, logs completion details, and archives/locks the Discord thread.
+### 3. Utility Slash Commands
+* `/status`: Queries the active/completed process details (duration, log location, model configuration, and parsed token/subagent details).
+* `/model [name]`: Gets or sets the LLM model for the thread. If a model name is provided, updates the thread configuration for subsequent resumption/continuation runs.
+* `/usage`: Displays overall token usage for the current billing cycle, remaining quota balance, cycle reset date, and individual tool usage breakdown.
+* `/export`: Saves a Markdown transcription of the thread history into your local project workspace.
+* `/kill`: Terminates the running process (`SIGTERM` -> `SIGKILL`) and archives the thread.

@@ -2,17 +2,8 @@ const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('agent')
-    .setDescription('Initiates an agentic CLI task in a new thread')
-    .addStringOption(option =>
-      option.setName('tool')
-        .setDescription('Select the agent CLI tool')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Antigravity CLI (agy)', value: 'agy' },
-          { name: 'Codex CLI (codex)', value: 'codex' }
-        )
-    )
+    .setName('agy')
+    .setDescription('Initiates an Antigravity task in a new thread')
     .addStringOption(option =>
       option.setName('directory')
         .setDescription('Absolute path or project folder name')
@@ -35,7 +26,46 @@ const commands = [
     )
     .addStringOption(option =>
       option.setName('model')
-        .setDescription('Specify LLM model name (e.g. gpt-4o, o3-mini)')
+        .setDescription('Specify LLM model name (e.g. gemini-2.5-pro)')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('flags')
+        .setDescription('Custom command-line flags (e.g. --sandbox)')
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('codex')
+    .setDescription('Initiates a Codex task in a new thread')
+    .addStringOption(option =>
+      option.setName('directory')
+        .setDescription('Absolute path or project folder name')
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(option =>
+      option.setName('task')
+        .setDescription('Explain the task or prompt for the agent to execute')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('mode')
+        .setDescription('Execution mode (default: review)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Review Mode (default)', value: 'review' },
+          { name: 'YOLO Mode (auto-approve)', value: 'yolo' }
+        )
+    )
+    .addStringOption(option =>
+      option.setName('model')
+        .setDescription('Specify LLM model name (e.g. o3-mini)')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('flags')
+        .setDescription('Custom command-line flags (e.g. --strict-config)')
         .setRequired(false)
     ),
 
