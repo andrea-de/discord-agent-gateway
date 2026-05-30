@@ -627,7 +627,7 @@ async function handleModelCommand(interaction) {
 // Log registry file for overall token usage statistics
 const USAGE_FILE = path.join(__dirname, '../.usage-registry.json');
 
-function recordUsage(tool, threadId, tokens) {
+function recordUsage(tool, threadId, model, tokens) {
   if (!tokens || isNaN(tokens)) return;
   try {
     let data = [];
@@ -638,6 +638,7 @@ function recordUsage(tool, threadId, tokens) {
       timestamp: new Date().toISOString(),
       threadId,
       tool,
+      model: model || 'Default',
       tokens
     });
     fs.writeFileSync(USAGE_FILE, JSON.stringify(data, null, 2));
@@ -657,6 +658,7 @@ async function handleUsageCommand(interaction) {
   let globalTokens = 0;
   let toolTotals = { agy: 0, codex: 0 };
   let threadTotalsMap = new Map(); // threadId -> { tool, tokens }
+  let threadModelTotals = new Map(); // modelName -> tokens
 
   try {
     if (fs.existsSync(USAGE_FILE)) {
@@ -669,6 +671,9 @@ async function handleUsageCommand(interaction) {
         if (record.threadId) {
           if (record.threadId === threadId) {
             threadTokens += record.tokens;
+            const modelKey = record.model || (record.tool === 'agy' ? 'Gemini 3.5 Flash' : 'Default Codex Model');
+            const prevModelTokens = threadModelTotals.get(modelKey) || 0;
+            threadModelTotals.set(modelKey, prevModelTokens + record.tokens);
           }
           const current = threadTotalsMap.get(record.threadId) || { tool: record.tool, tokens: 0 };
           current.tokens += record.tokens;
@@ -685,7 +690,7 @@ async function handleUsageCommand(interaction) {
     const { getDriver } = require('./drivers');
     try {
       const driver = getDriver(meta.tool);
-      const usageCard = driver.getProviderUsageInfo(threadTokens, meta.model);
+      const usageCard = driver.getProviderUsageInfo(threadTokens, meta.model, threadModelTotals);
       return interaction.editReply(usageCard);
     } catch (err) {
       return interaction.editReply(`❌ **Failed to retrieve provider usage details:** ${err.message}`);
@@ -732,8 +737,8 @@ processManager.on('taskEnded', (task) => {
       const tokenStr = tokenMatch[1].replace(/,/g, '');
       const tokens = parseInt(tokenStr, 10);
       if (!isNaN(tokens)) {
-        recordUsage(task.tool, task.threadId, tokens);
-        console.log(`[Task Ended] Recorded usage: ${tokens} tokens for ${task.tool} in thread ${task.threadId}.`);
+        recordUsage(task.tool, task.threadId, meta.model, tokens);
+        console.log(`[Task Ended] Recorded usage: ${tokens} tokens for ${task.tool} (${meta.model}) in thread ${task.threadId}.`);
       }
     }
   }

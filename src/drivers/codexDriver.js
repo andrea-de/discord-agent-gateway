@@ -9,13 +9,22 @@ class CodexDriver {
     return true;
   }
 
-  getProviderUsageInfo(threadTokens, modelName) {
-    const model = modelName || 'Default Codex Model';
-    return `### 🧠 OpenAI Codex API Usage
-* **Provider Model:** \`${model}\`
-* **Current Thread Usage:** \`${threadTokens.toLocaleString()} tokens\`
-* **Reset Interval:** Organization billing quotas typically reset monthly. Rate limits (RPM/TPM) reset every minute.
-* **Quota Note:** Credit allocations are managed in your OpenAI developer dashboard.`;
+  getProviderUsageInfo(threadTokens, activeModel, modelTotalsMap) {
+    let details = `### 🧠 OpenAI Codex API Usage\n`;
+    details += `* **Active Thread Model:** \`${activeModel || 'Default Codex Model'}\`\n\n`;
+    
+    details += `**Token Usage Breakdown by Model:**\n`;
+    if (!modelTotalsMap || modelTotalsMap.size === 0) {
+      const fallbackModel = activeModel || 'Default Codex Model';
+      details += `* \`${fallbackModel}\`: \`${threadTokens.toLocaleString()} tokens\`\n`;
+    } else {
+      for (const [model, tokens] of modelTotalsMap.entries()) {
+        details += `* \`${model}\`: \`${tokens.toLocaleString()} tokens\`\n`;
+      }
+    }
+    
+    details += `\n* **Reset Interval:** Organization billing quotas typically reset monthly. Rate limits (RPM/TPM) reset every minute.`;
+    return details;
   }
 
   getArgs({ prompt, mode, isContinue, model, flags }) {

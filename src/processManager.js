@@ -233,8 +233,8 @@ Time: ${taskContext.startTime.toISOString()}
         
         const authorName = task.tool === 'agy' ? 'Antigravity CLI' : 'Codex CLI';
         const authorIcon = task.tool === 'agy' 
-          ? 'https://cdn.icon-icons.com/icons2/4335/PNG/512/google_gemini_logo_icon_262842.png'
-          : 'https://cdn.icon-icons.com/icons2/4119/PNG/512/openai_logo_icon_260905.png';
+          ? 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Google_Gemini_logo.svg/120px-Google_Gemini_logo.svg.png'
+          : 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/120px-OpenAI_Logo.svg.png';
 
         // Attempt to edit last message's embed to append the new text chunk
         if (lastMsg && lastMsg.embeds && lastMsg.embeds.length > 0 &&
