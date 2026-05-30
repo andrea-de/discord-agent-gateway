@@ -195,8 +195,6 @@ Time: ${taskContext.startTime.toISOString()}
     let textToFlush = task.stdoutBuffer;
     task.stdoutBuffer = ''; // Clear buffer
 
-    const header = '```\n';
-    const footer = '\n```';
     const maxMsgLength = 1950;
 
     // Split text into chunks that fit Discord's 2000-char message limit
@@ -223,20 +221,18 @@ Time: ${taskContext.startTime.toISOString()}
         
         // Attempt to edit last message to create a "rolling terminal" effect
         if (lastMsg && (lastMsg.content.length + chunk.length < maxMsgLength)) {
-          const innerContent = lastMsg.content.substring(header.length, lastMsg.content.length - footer.length);
-          const updatedContent = header + innerContent + chunk + footer;
-          
+          const updatedContent = lastMsg.content + chunk;
           await lastMsg.edit(updatedContent);
         } else {
           // Send new message if block is full or first time
-          const sentMsg = await task.thread.send(header + chunk + footer);
+          const sentMsg = await task.thread.send(chunk);
           task.lastLogMessage = sentMsg;
         }
       } catch (err) {
         console.error('Failed to flush log chunk to Discord:', err);
         // Fallback: send fresh message
         try {
-          const sentMsg = await task.thread.send(header + chunk + footer);
+          const sentMsg = await task.thread.send(chunk);
           task.lastLogMessage = sentMsg;
         } catch (subErr) {
           console.error('Fallback send failed:', subErr);
