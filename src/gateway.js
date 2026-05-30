@@ -323,6 +323,8 @@ async function handleAgentCommand(interaction) {
   const channelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
 
   let targetChannel = channel;
+  let permissionWarning = null;
+
   try {
     // 1. Find or create the AGENT PROJECTS category
     let category = guild.channels.cache.find(c => c.name === 'AGENT PROJECTS' && c.type === ChannelType.GuildCategory);
@@ -334,6 +336,9 @@ async function handleAgentCommand(interaction) {
         });
       } catch (catErr) {
         console.warn('Could not create AGENT PROJECTS category:', catErr.message);
+        if (catErr.code === 50013 || catErr.status === 403) {
+          permissionWarning = 'Missing "Manage Channels" permission to create "AGENT PROJECTS" category.';
+        }
       }
     }
 
@@ -354,6 +359,9 @@ async function handleAgentCommand(interaction) {
     targetChannel = projectChannel;
   } catch (chanErr) {
     console.error('Failed to resolve project channel, falling back to current channel:', chanErr);
+    if (chanErr.code === 50013 || chanErr.status === 403) {
+      permissionWarning = 'Missing "Manage Channels" permission to create project text channels.';
+    }
     targetChannel = channel;
   }
 
@@ -376,6 +384,11 @@ async function handleAgentCommand(interaction) {
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
 ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
+
+    if (permissionWarning) {
+      const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=105226685456&scope=bot%20applications.commands`;
+      await thread.send(`⚠️ **Notice:** ${permissionWarning} Thread fell back to the current channel (<#${channel.id}>). To enable auto-channel creation for new projects under an **AGENT PROJECTS** category, please grant the bot the **Manage Channels** permission, or [click here to re-authorize the bot](${inviteUrl}).`);
+    }
 
     // 2. Start background task
     await interaction.editReply({

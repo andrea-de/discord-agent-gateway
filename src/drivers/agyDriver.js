@@ -10,20 +10,95 @@ class AgyDriver {
   }
 
   getProviderUsageInfo(threadTokens, activeModel, modelTotalsMap) {
-    let details = `### ♊ Google Gemini API Usage\n`;
-    details += `* **Active Thread Model:** \`${activeModel || 'Gemini 3.5 Flash'}\`\n\n`;
-    
-    details += `**Token Usage Breakdown by Model:**\n`;
-    if (!modelTotalsMap || modelTotalsMap.size === 0) {
-      const fallbackModel = activeModel || 'Gemini 3.5 Flash';
-      details += `* \`${fallbackModel}\`: \`${threadTokens.toLocaleString()} tokens\`\n`;
-    } else {
-      for (const [model, tokens] of modelTotalsMap.entries()) {
-        details += `* \`${model}\`: \`${tokens.toLocaleString()} tokens\`\n`;
+    const MODEL_LIMITS = {
+      'Gemini 3.5 Flash (Medium)': 1000000,
+      'Gemini 3.5 Flash (High)': 500000,
+      'Gemini 3.5 Flash (Low)': 2000000,
+      'Gemini 3.1 Pro (Low)': 250000,
+      'Gemini 3.1 Pro (High)': 100000,
+      'Claude Sonnet 4.6 (Thinking)': 200000,
+    };
+
+    const cleanModelName = (modelName) => {
+      if (!modelName) return 'Gemini 3.5 Flash (Medium)';
+      const lower = modelName.toLowerCase();
+      if (lower.includes('flash') && lower.includes('medium')) return 'Gemini 3.5 Flash (Medium)';
+      if (lower.includes('flash') && lower.includes('high')) return 'Gemini 3.5 Flash (High)';
+      if (lower.includes('flash') && lower.includes('low')) return 'Gemini 3.5 Flash (Low)';
+      if (lower.includes('pro') && lower.includes('low')) return 'Gemini 3.1 Pro (Low)';
+      if (lower.includes('pro') && lower.includes('high')) return 'Gemini 3.1 Pro (High)';
+      if (lower.includes('sonnet') || lower.includes('claude')) return 'Claude Sonnet 4.6 (Thinking)';
+      if (lower.includes('flash')) return 'Gemini 3.5 Flash (Medium)';
+      if (lower.includes('pro')) return 'Gemini 3.1 Pro (Low)';
+      return modelName;
+    };
+
+    const getProgressBar = (percent) => {
+      const totalChars = 55;
+      const filledChars = Math.max(0, Math.min(totalChars, Math.round((percent / 100) * totalChars)));
+      let barStr = '';
+      for (let i = 0; i < totalChars; i++) {
+        barStr += i < filledChars ? '█' : '░';
+      }
+      const blocks = [];
+      for (let i = 0; i < 5; i++) {
+        blocks.push(barStr.substring(i * 11, (i + 1) * 11));
+      }
+      return blocks.join(' ');
+    };
+
+    // Calculate dynamic reset time (every 6 hour boundary)
+    const now = new Date();
+    const nextReset = new Date();
+    nextReset.setUTCMinutes(0, 0, 0);
+    const hours = now.getUTCHours();
+    const nextHour = 6 - (hours % 6);
+    nextReset.setUTCHours(hours + nextHour);
+    const diffMs = nextReset - now;
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffMins = Math.floor((diffMs % 3600000) / 60000);
+    const resetStr = `Resets in ${diffHours}h ${diffMins}m`;
+
+    const cleanedUsage = {};
+    if (modelTotalsMap) {
+      for (const [modelKey, tokens] of modelTotalsMap.entries()) {
+        const cleanName = cleanModelName(modelKey);
+        cleanedUsage[cleanName] = (cleanedUsage[cleanName] || 0) + tokens;
       }
     }
-    
-    details += `\n* **Reset Interval:** Rate limits (RPM/TPM) reset every minute. Daily free tier quotas reset at midnight.`;
+
+    const cleanedActiveModel = cleanModelName(activeModel);
+
+    let details = `### ♊ Google Gemini API Usage & Quotas\n`;
+    details += `* **Active Thread Model:** \`${cleanedActiveModel}\`\n\n`;
+    details += `\`\`\`text\n`;
+    details += `└ Model Quota\n\n`;
+
+    const modelsToDisplay = [
+      'Gemini 3.5 Flash (Medium)',
+      'Gemini 3.5 Flash (High)',
+      'Gemini 3.5 Flash (Low)',
+      'Gemini 3.1 Pro (Low)',
+      'Gemini 3.1 Pro (High)',
+      'Claude Sonnet 4.6 (Thinking)',
+    ];
+
+    modelsToDisplay.forEach(modelName => {
+      const used = cleanedUsage[modelName] || 0;
+      const limit = MODEL_LIMITS[modelName];
+      const remainingPercent = Math.max(0, Math.min(100, Math.round(((limit - used) / limit) * 100)));
+      const barStr = getProgressBar(remainingPercent);
+      const statusStr = remainingPercent > 0 ? 'Quota available' : 'Quota exhausted';
+      const isActive = cleanedActiveModel === modelName;
+
+      details += `  ${modelName}${isActive ? ' (active) ★' : ''}\n`;
+      details += `  ${barStr} ${remainingPercent}%\n`;
+      details += `  ${statusStr} (${used.toLocaleString()} / ${limit.toLocaleString()} tokens used)\n\n`;
+    });
+
+    details += `  ${resetStr}\n`;
+    details += `\`\`\`\n`;
+
     return details;
   }
 
