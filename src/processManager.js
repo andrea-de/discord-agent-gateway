@@ -78,8 +78,8 @@ class ProcessManager extends EventEmitter {
       env: spawnEnv
     });
 
-    // For agy, stdin must be closed to prevent it from blocking/waiting on EOF
-    if (tool === 'agy') {
+    // For agy and codex, stdin must be closed to prevent them from blocking/waiting on EOF
+    if (tool === 'agy' || tool === 'codex') {
       child.stdin.end();
     }
 

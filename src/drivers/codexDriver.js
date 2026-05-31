@@ -6,7 +6,7 @@ class CodexDriver {
   }
 
   isInteractive() {
-    return true;
+    return false;
   }
 
   getProviderUsageInfo(threadTokens, activeModel, modelTotalsMap) {
