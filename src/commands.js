@@ -5,15 +5,24 @@ const commands = [
     .setName('agy')
     .setDescription('Initiates an Antigravity task in a new thread')
     .addStringOption(option =>
-      option.setName('directory')
-        .setDescription('Absolute path or project folder name')
-        .setRequired(true)
-        .setAutocomplete(true)
-    )
-    .addStringOption(option =>
       option.setName('task')
         .setDescription('Explain the task or prompt for the agent to execute')
         .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('directory')
+        .setDescription('Absolute path or project folder name')
+        .setRequired(false)
+        .setAutocomplete(true)
+    )
+    .addStringOption(option =>
+      option.setName('gateway')
+        .setDescription('Target gateway location (e.g. HELSINKI, NUREMBERG)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Helsinki', value: 'HELSINKI' },
+          { name: 'Nuremberg', value: 'NUREMBERG' }
+        )
     )
     .addStringOption(option =>
       option.setName('mode')
@@ -39,15 +48,24 @@ const commands = [
     .setName('codex')
     .setDescription('Initiates a Codex task in a new thread')
     .addStringOption(option =>
-      option.setName('directory')
-        .setDescription('Absolute path or project folder name')
-        .setRequired(true)
-        .setAutocomplete(true)
-    )
-    .addStringOption(option =>
       option.setName('task')
         .setDescription('Explain the task or prompt for the agent to execute')
         .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('directory')
+        .setDescription('Absolute path or project folder name')
+        .setRequired(false)
+        .setAutocomplete(true)
+    )
+    .addStringOption(option =>
+      option.setName('gateway')
+        .setDescription('Target gateway location (e.g. HELSINKI, NUREMBERG)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Helsinki', value: 'HELSINKI' },
+          { name: 'Nuremberg', value: 'NUREMBERG' }
+        )
     )
     .addStringOption(option =>
       option.setName('mode')

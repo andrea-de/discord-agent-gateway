@@ -102,6 +102,10 @@ client.once('ready', async () => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+  if (!isTargetForInteraction(interaction)) {
+    return; // Ignore if this instance is not the target
+  }
+
   const { commandName } = interaction;
 
   if (commandName === 'agy' || commandName === 'codex') {
@@ -124,6 +128,10 @@ client.on('interactionCreate', async (interaction) => {
  */
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isAutocomplete()) return;
+
+  if (!isTargetForInteraction(interaction)) {
+    return; // Ignore autocomplete suggestions for other instances
+  }
 
   const { commandName } = interaction;
 
@@ -239,6 +247,12 @@ client.on('messageCreate', async (message) => {
   // Verify we are inside a thread
   if (!message.channel.isThread()) return;
 
+  // Verify target gateway for this thread to prevent multiple bot instances from responding
+  const { gateway } = resolveGatewayAndProject(message.channel);
+  if (gateway && gateway !== currentGateway) {
+    return; // Ignore if this thread belongs to a different gateway
+  }
+
   const threadId = message.channel.id;
   const task = processManager.activeTasks.get(threadId);
   const content = message.content.trim();
@@ -290,6 +304,80 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+const currentGateway = (process.env.GATEWAY_NAME || 'HELSINKI').toUpperCase();
+
+function resolveGatewayAndProject(channel) {
+  let textChannel = channel;
+  if (channel.isThread()) {
+    textChannel = channel.parent;
+  }
+  
+  if (!textChannel) return { gateway: null, project: null };
+  
+  const parentCategory = textChannel.parent;
+  let gateway = null;
+  let project = null;
+  
+  if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
+    gateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
+    project = textChannel.name;
+  } else {
+    // If the text channel is a general channel for a specific gateway (e.g. #helsinki)
+    const channelNameClean = textChannel.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const knownGateways = ['HELSINKI', 'NUREMBERG']; // Standard gateways
+    if (knownGateways.includes(channelNameClean)) {
+      gateway = channelNameClean;
+    }
+  }
+  
+  return { gateway, project };
+}
+
+function isTargetForInteraction(interaction) {
+  const channel = interaction.channel;
+  if (!channel) return false;
+  
+  let textChannel = channel;
+  if (channel.isThread()) {
+    textChannel = channel.parent;
+  }
+  if (!textChannel) return false;
+
+  // 1. Check parent category name (e.g. "HELSINKI GATEWAY")
+  const parentCategory = textChannel.parent;
+  if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
+    const channelGateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
+    return channelGateway === currentGateway;
+  }
+
+  // 2. Check text channel name (e.g. #helsinki -> matches HELSINKI)
+  const channelNameClean = textChannel.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (channelNameClean === currentGateway) {
+    return true;
+  }
+  
+  // If the channel name is matching *another* known gateway, we are NOT the target
+  const knownGateways = ['HELSINKI', 'NUREMBERG'];
+  if (knownGateways.includes(channelNameClean) && channelNameClean !== currentGateway) {
+    return false;
+  }
+
+  // 3. Check explicitly chosen option "gateway"
+  try {
+    const chosenGateway = interaction.options.getString('gateway');
+    if (chosenGateway) {
+      return chosenGateway.toUpperCase() === currentGateway;
+    }
+  } catch (e) {}
+
+  // 4. Default: If run in general and no option is specified, let HELSINKI act as default responder to explain
+  if (!chosenGateway && !channelGateway) {
+    return currentGateway === 'HELSINKI';
+  }
+
+  return false;
+}
+
 /**
  * COMMAND HANDLER: /agent
  */
@@ -318,26 +406,76 @@ async function handleAgentCommand(interaction) {
     });
   }
 
-  // Derive project channel name from the directory path
-  const projectDirName = directory.split(/[/\\]/).filter(Boolean).pop() || 'general';
+  // Target Gateway resolution & validation
+  const chosenGateway = interaction.options.getString('gateway');
+  const { gateway: inferredGateway, project: inferredProject } = resolveGatewayAndProject(channel);
+
+  if (!inferredGateway && !chosenGateway) {
+    return interaction.editReply({
+      content: `❌ **Target Gateway required:** Please specify the \`gateway\` option when running from a general channel.`
+    });
+  }
+
+  // Resolve directory path
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  let resolvedDirectory = directory;
+
+  if (!resolvedDirectory && inferredProject) {
+    if (PROJECTS_ROOT) {
+      const os = require('os');
+      let resolvedRoot = PROJECTS_ROOT;
+      if (PROJECTS_ROOT.startsWith('~')) {
+        resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+      }
+      const targetPath = path.join(resolvedRoot, inferredProject);
+      if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+        resolvedDirectory = targetPath;
+      }
+    }
+  }
+
+  // Resolve relative directory names if typed manually
+  if (resolvedDirectory && !path.isAbsolute(resolvedDirectory) && !resolvedDirectory.startsWith('~')) {
+    if (PROJECTS_ROOT) {
+      const os = require('os');
+      let resolvedRoot = PROJECTS_ROOT;
+      if (PROJECTS_ROOT.startsWith('~')) {
+        resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+      }
+      const targetPath = path.join(resolvedRoot, resolvedDirectory);
+      if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+        resolvedDirectory = targetPath;
+      }
+    }
+  }
+
+  if (!resolvedDirectory) {
+    return interaction.editReply({
+      content: `❌ **Directory required:** Please specify the \`directory\` option or run the command from a project-specific text channel under a Gateway Category.`
+    });
+  }
+
+  // Derive project channel name from the resolved directory path
+  const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
   const channelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
 
   let targetChannel = channel;
   let permissionWarning = null;
+  const categoryName = `${currentGateway} GATEWAY`;
 
   try {
-    // 1. Find or create the AGENT PROJECTS category
-    let category = guild.channels.cache.find(c => c.name === 'AGENT PROJECTS' && c.type === ChannelType.GuildCategory);
+    // 1. Find or create the Gateway category (e.g. HELSINKI GATEWAY)
+    let category = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
     if (!category) {
       try {
         category = await guild.channels.create({
-          name: 'AGENT PROJECTS',
+          name: categoryName,
           type: ChannelType.GuildCategory
         });
       } catch (catErr) {
-        console.warn('Could not create AGENT PROJECTS category:', catErr.message);
+        console.warn(`Could not create category "${categoryName}":`, catErr.message);
         if (catErr.code === 50013 || catErr.status === 403) {
-          permissionWarning = 'Missing "Manage Channels" permission to create "AGENT PROJECTS" category.';
+          permissionWarning = `Missing "Manage Channels" permission to create the "${categoryName}" category.`;
         }
       }
     }
@@ -348,7 +486,7 @@ async function handleAgentCommand(interaction) {
       const channelOpts = {
         name: channelName,
         type: ChannelType.GuildText,
-        reason: `Auto-provisioned text channel for directory: ${directory}`
+        reason: `Auto-provisioned text channel for directory: ${resolvedDirectory}`
       };
       if (category) {
         channelOpts.parent = category.id;
@@ -380,14 +518,14 @@ async function handleAgentCommand(interaction) {
     // Send initial task header card
     await thread.send(`### 🤖 Task Initiated
 * **Tool:** \`${tool.toUpperCase()}\`
-* **Directory:** \`${directory}\`
+* **Directory:** \`${resolvedDirectory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
 ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
 
     if (permissionWarning) {
       const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=105226685456&scope=bot%20applications.commands`;
-      await thread.send(`⚠️ **Notice:** ${permissionWarning} Thread fell back to the current channel (<#${channel.id}>). To enable auto-channel creation for new projects under an **AGENT PROJECTS** category, please grant the bot the **Manage Channels** permission, or [click here to re-authorize the bot](${inviteUrl}).`);
+      await thread.send(`⚠️ **Notice:** ${permissionWarning} Thread fell back to the current channel (<#${channel.id}>). To enable auto-channel creation for new projects under an **${categoryName}** category, please grant the bot the **Manage Channels** permission, or [click here to re-authorize the bot](${inviteUrl}).`);
     }
 
     // 2. Start background task
@@ -400,7 +538,7 @@ ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
     await processManager.startTask({
       thread,
       tool,
-      directory,
+      directory: resolvedDirectory,
       mode,
       prompt: taskPrompt,
       model,
@@ -408,7 +546,7 @@ ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
     });
 
     // Record thread session metadata for conversation resumption
-    threadMetadata.set(thread.id, { tool, directory, mode, model, flags });
+    threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags });
     saveMetadata();
 
   } catch (error) {
