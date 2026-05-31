@@ -420,7 +420,12 @@ function resolveGatewayAndProject(channel) {
   
   if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
     gateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
-    project = textChannel.name;
+    const suffix = `-${gateway.toLowerCase()}`;
+    if (textChannel.name.endsWith(suffix)) {
+      project = textChannel.name.substring(0, textChannel.name.length - suffix.length);
+    } else {
+      project = textChannel.name;
+    }
   } else {
     // If the text channel is a general channel for a specific gateway (e.g. #helsinki)
     const channelNameClean = textChannel.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -587,7 +592,8 @@ async function handleAgentCommand(interaction) {
 
   // Derive project channel name from the resolved directory path
   const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
-  const channelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  const baseChannelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  const channelName = `${baseChannelName}-${currentGateway.toLowerCase()}`;
 
   let targetChannel = channel;
   let permissionWarning = null;
