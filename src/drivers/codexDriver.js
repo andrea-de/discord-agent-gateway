@@ -54,6 +54,18 @@ class CodexDriver {
 
     if (directory) {
       args.push('-C', directory);
+
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      let resolvedDir = directory;
+      if (directory.startsWith('~')) {
+        resolvedDir = path.join(os.homedir(), directory.substring(1));
+      }
+      const isGit = fs.existsSync(path.join(resolvedDir, '.git'));
+      if (!isGit) {
+        args.push('--skip-git-repo-check');
+      }
     }
 
     if (flags) {
