@@ -124,9 +124,6 @@ client.once('ready', async () => {
               type: ChannelType.GuildText,
               reason: `Gateway startup auto-provision`
             };
-            if (category) {
-              channelOpts.parent = category.id;
-            }
             gatewayChannel = await guild.channels.create(channelOpts);
             console.log(`Created gateway channel "#${channelName}" on startup.`);
           } catch (chanErr) {
