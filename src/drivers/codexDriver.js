@@ -53,7 +53,9 @@ class CodexDriver {
     }
 
     if (directory) {
-      args.push('-C', directory);
+      if (!isContinue) {
+        args.push('-C', directory);
+      }
 
       const fs = require('fs');
       const path = require('path');
@@ -105,8 +107,11 @@ class CodexDriver {
 
     let cleaned = match[1];
 
-    // 2. Strip out the 'tokens used' summary at the end
-    cleaned = cleaned.replace(/tokens used\s*\n\s*[\d,]+/i, '').trim();
+    // 2. Discard the 'tokens used' line and everything after it to prevent duplicate reprint
+    const tokensIndex = cleaned.toLowerCase().indexOf('tokens used');
+    if (tokensIndex !== -1) {
+      cleaned = cleaned.substring(0, tokensIndex).trim();
+    }
 
     // 3. Strip duplicate history (for continuation sessions)
     const { stripDuplicatePrefix } = require('../parser');
