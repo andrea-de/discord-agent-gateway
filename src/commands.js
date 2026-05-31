@@ -92,6 +92,10 @@ const commands = [
     .setDescription('Queries status of the active agent task in this thread'),
 
   new SlashCommandBuilder()
+    .setName('info')
+    .setDescription('Displays information and interactive dashboard for the current project text channel'),
+
+  new SlashCommandBuilder()
     .setName('usage')
     .setDescription('Displays overall token usage and remaining quota for this billing cycle'),
 

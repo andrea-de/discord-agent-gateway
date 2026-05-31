@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const processManager = require('./processManager');
@@ -179,6 +179,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleExportCommand(interaction);
   } else if (commandName === 'kill') {
     await handleKillCommand(interaction);
+  } else if (commandName === 'info') {
+    await handleInfoCommand(interaction);
   }
 });
 
@@ -293,6 +295,18 @@ client.on('interactionCreate', async (interaction) => {
       ephemeral: true
     });
   }
+});
+
+/**
+ * Handle button interaction for project dashboards
+ */
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const customId = interaction.customId;
+  if (!customId.startsWith('project:')) return;
+
+  await handleProjectButton(interaction);
 });
 
 /**
@@ -573,7 +587,35 @@ async function handleAgentCommand(interaction) {
         channelOpts.parent = category.id;
       }
       projectChannel = await guild.channels.create(channelOpts);
-      await projectChannel.send(`📁 **Welcome to the Project Channel for \`${projectDirName}\`!**\nAll agent tasks run inside this directory will be spawned as threads here.`);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📁 Project Dashboard: ${projectDirName}`)
+        .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively query project info ephemerally.`)
+        .setColor('#2b2d31')
+        .addFields(
+          { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
+          { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
+        );
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('project:readme')
+          .setLabel('View README')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📖'),
+        new ButtonBuilder()
+          .setCustomId('project:files')
+          .setLabel('List Files')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📁'),
+        new ButtonBuilder()
+          .setCustomId('project:git')
+          .setLabel('Git Status')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('🌿')
+      );
+
+      await projectChannel.send({ embeds: [embed], components: [row] });
     }
     targetChannel = projectChannel;
   } catch (chanErr) {
@@ -994,6 +1036,236 @@ processManager.on('taskEnded', (task) => {
     }
   }
 });
+
+/**
+ * COMMAND HANDLER: /info
+ */
+async function handleInfoCommand(interaction) {
+  const channel = interaction.channel;
+  if (!channel) return interaction.reply({ content: '❌ Channel not found.', ephemeral: true });
+
+  const { gateway, project: inferredProject } = resolveGatewayAndProject(channel);
+  if (!inferredProject) {
+    return interaction.reply({
+      content: '❌ This command can only be run inside a project text channel under a Gateway Category.',
+      ephemeral: true
+    });
+  }
+
+  // Resolve directory path
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  let resolvedDirectory = null;
+
+  if (PROJECTS_ROOT) {
+    const os = require('os');
+    let resolvedRoot = PROJECTS_ROOT;
+    if (PROJECTS_ROOT.startsWith('~')) {
+      resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+    }
+    const targetPath = path.join(resolvedRoot, inferredProject);
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+      resolvedDirectory = targetPath;
+    }
+  }
+
+  if (!resolvedDirectory) {
+    return interaction.reply({
+      content: `❌ Could not resolve the local project directory for project: \`${inferredProject}\`.`,
+      ephemeral: true
+    });
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📁 Project Dashboard: ${inferredProject}`)
+    .setDescription(`Use the buttons below to interactively fetch information about this project. Responses are sent **ephemerally** to prevent channel clutter.`)
+    .setColor('#2b2d31')
+    .addFields(
+      { name: 'Gateway', value: `\`${gateway || 'Default'}\``, inline: true },
+      { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('project:readme')
+      .setLabel('View README')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📖'),
+    new ButtonBuilder()
+      .setCustomId('project:files')
+      .setLabel('List Files')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📁'),
+    new ButtonBuilder()
+      .setCustomId('project:git')
+      .setLabel('Git Status')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🌿')
+  );
+
+  return interaction.reply({ embeds: [embed], components: [row] });
+}
+
+/**
+ * Handle button clicks for project-specific information dashboard (readme, files, git status)
+ */
+async function handleProjectButton(interaction) {
+  const action = interaction.customId.substring('project:'.length);
+  const channel = interaction.channel;
+  if (!channel) {
+    return interaction.reply({ content: '❌ Channel not found.', ephemeral: true });
+  }
+
+  const { gateway, project: inferredProject } = resolveGatewayAndProject(channel);
+  if (!inferredProject) {
+    return interaction.reply({
+      content: '❌ This channel does not appear to be a registered project text channel under a Gateway Category.',
+      ephemeral: true
+    });
+  }
+
+  // Resolve directory path
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  let resolvedDirectory = null;
+
+  if (PROJECTS_ROOT) {
+    const os = require('os');
+    let resolvedRoot = PROJECTS_ROOT;
+    if (PROJECTS_ROOT.startsWith('~')) {
+      resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+    }
+    const targetPath = path.join(resolvedRoot, inferredProject);
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+      resolvedDirectory = targetPath;
+    }
+  }
+
+  if (!resolvedDirectory) {
+    return interaction.reply({
+      content: `❌ Could not resolve the local project directory for project: \`${inferredProject}\`. Please verify your PROJECTS_ROOT setting.`,
+      ephemeral: true
+    });
+  }
+
+  // Defer ephemeral reply
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    if (action === 'readme') {
+      const files = fs.readdirSync(resolvedDirectory);
+      const readmeFile = files.find(f => {
+        const lower = f.toLowerCase();
+        return lower === 'readme.md' || lower === 'readme' || lower === 'readme.txt' || lower === 'readme.markdown';
+      });
+
+      if (!readmeFile) {
+        return interaction.editReply({
+          content: `❌ No README file found in \`${resolvedDirectory}\`.`
+        });
+      }
+
+      const readmePath = path.join(resolvedDirectory, readmeFile);
+      let content = fs.readFileSync(readmePath, 'utf8');
+      
+      if (content.trim().length === 0) {
+        return interaction.editReply({
+          content: `📖 **${readmeFile}** is empty.`
+        });
+      }
+
+      const maxLength = 1900;
+      let truncated = false;
+      if (content.length > maxLength) {
+        content = content.substring(0, maxLength);
+        truncated = true;
+      }
+
+      const replyText = `📖 **README.md for ${inferredProject}**:\n\`\`\`markdown\n${content}\n\`\`\`${truncated ? '\n*(truncated due to Discord character limit)*' : ''}`;
+      return interaction.editReply({ content: replyText });
+
+    } else if (action === 'files') {
+      const files = fs.readdirSync(resolvedDirectory);
+      const items = [];
+      for (const file of files) {
+        if (file === '.git' || file === 'node_modules') continue;
+        const fullPath = path.join(resolvedDirectory, file);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            items.push(`📁 ${file}/`);
+          } else {
+            items.push(`📄 ${file}`);
+          }
+        } catch (e) {}
+      }
+
+      if (items.length === 0) {
+        return interaction.editReply({
+          content: `📁 **${inferredProject}** is empty.`
+        });
+      }
+
+      // Sort directories first, then files
+      items.sort((a, b) => {
+        if (a.startsWith('📁') && !b.startsWith('📁')) return -1;
+        if (!a.startsWith('📁') && b.startsWith('📁')) return 1;
+        return a.localeCompare(b);
+      });
+
+      const listText = items.join('\n');
+      const maxLength = 1900;
+      let displayList = listText;
+      let truncated = false;
+      if (listText.length > maxLength) {
+        displayList = listText.substring(0, maxLength);
+        truncated = true;
+      }
+
+      const replyText = `📁 **Workspace Directory Tree (${inferredProject})**:\n\`\`\`\n${displayList}\n\`\`\`${truncated ? '\n*(truncated)*' : ''}`;
+      return interaction.editReply({ content: replyText });
+
+    } else if (action === 'git') {
+      const isGit = fs.existsSync(path.join(resolvedDirectory, '.git'));
+      if (!isGit) {
+        return interaction.editReply({
+          content: `❌ Directory \`${resolvedDirectory}\` is not a git repository.`
+        });
+      }
+
+      const { exec } = require('child_process');
+      exec('git status -s', { cwd: resolvedDirectory }, (error, stdout, stderr) => {
+        if (error) {
+          return interaction.editReply({
+            content: `❌ Error running git status: \`${error.message}\``
+          });
+        }
+        
+        const cleanStdout = stdout.trim();
+        if (cleanStdout.length === 0) {
+          return interaction.editReply({
+            content: `🌿 **Git Status (${inferredProject})**:\n\`\`\`\nWorking directory clean. Everything up-to-date.\n\`\`\``
+          });
+        }
+
+        const maxLength = 1900;
+        let displayStatus = cleanStdout;
+        let truncated = false;
+        if (cleanStdout.length > maxLength) {
+          displayStatus = cleanStdout.substring(0, maxLength);
+          truncated = true;
+        }
+
+        return interaction.editReply({
+          content: `🌿 **Git Status (${inferredProject})**:\n\`\`\`\n${displayStatus}\n\`\`\`${truncated ? '\n*(truncated)*' : ''}`
+        });
+      });
+    }
+  } catch (err) {
+    console.error('Error in handleProjectButton:', err);
+    return interaction.editReply({
+      content: `❌ Error processing request: ${err.message}`
+    });
+  }
+}
 
 // Clean up metadata when a thread is deleted
 client.on('threadDelete', async (thread) => {
