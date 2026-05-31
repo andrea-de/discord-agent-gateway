@@ -45,6 +45,8 @@ class CodexDriver {
       args = ['exec'];
       if (mode === 'yolo') {
         args.push('--dangerously-bypass-approvals-and-sandbox');
+      } else {
+        args.push('-s', 'danger-full-access');
       }
       if (model) {
         args.push('-m', model);
