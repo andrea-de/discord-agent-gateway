@@ -20,6 +20,7 @@ const commands = [
         .setDescription('Target gateway location (e.g. HELSINKI, NUREMBERG)')
         .setRequired(false)
         .addChoices(
+          { name: 'XPS', value: 'XPS' },
           { name: 'Helsinki', value: 'HELSINKI' },
           { name: 'Nuremberg', value: 'NUREMBERG' }
         )
@@ -63,6 +64,7 @@ const commands = [
         .setDescription('Target gateway location (e.g. HELSINKI, NUREMBERG)')
         .setRequired(false)
         .addChoices(
+          { name: 'XPS', value: 'XPS' },
           { name: 'Helsinki', value: 'HELSINKI' },
           { name: 'Nuremberg', value: 'NUREMBERG' }
         )

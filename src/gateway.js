@@ -199,6 +199,15 @@ client.on('interactionCreate', async (interaction) => {
   if (commandName === 'agy' || commandName === 'codex') {
     const focusedOption = interaction.options.getFocused(true);
     if (focusedOption.name === 'directory') {
+      const channel = interaction.channel;
+      if (channel) {
+        const parentCategory = channel.parent;
+        const isProjectChannel = parentCategory && parentCategory.name === `${currentGateway} GATEWAY` && channel.type === ChannelType.GuildText;
+        if (isProjectChannel) {
+          return interaction.respond([]);
+        }
+      }
+
       const root = process.env.PROJECTS_ROOT;
       if (!root) {
         return interaction.respond([]);
@@ -415,7 +424,7 @@ function resolveGatewayAndProject(channel) {
   } else {
     // If the text channel is a general channel for a specific gateway (e.g. #helsinki)
     const channelNameClean = textChannel.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const knownGateways = ['HELSINKI', 'NUREMBERG']; // Standard gateways
+    const knownGateways = ['HELSINKI', 'NUREMBERG', 'XPS']; // Standard gateways
     if (knownGateways.includes(channelNameClean)) {
       gateway = channelNameClean;
     }
@@ -425,6 +434,15 @@ function resolveGatewayAndProject(channel) {
 }
 
 function isTargetForInteraction(interaction) {
+  // 1. Check explicitly chosen option "gateway" first
+  let chosenGateway = null;
+  try {
+    chosenGateway = interaction.options.getString('gateway');
+    if (chosenGateway) {
+      return chosenGateway.toUpperCase() === currentGateway;
+    }
+  } catch (e) {}
+
   const channel = interaction.channel;
   if (!channel) return false;
   
@@ -435,7 +453,7 @@ function isTargetForInteraction(interaction) {
   if (!textChannel) return false;
 
   let channelGateway = null;
-  // 1. Check parent category name (e.g. "HELSINKI GATEWAY")
+  // 2. Check parent category name (e.g. "HELSINKI GATEWAY")
   const parentCategory = textChannel.parent;
   if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
     channelGateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
@@ -444,30 +462,21 @@ function isTargetForInteraction(interaction) {
     }
   }
 
-  // 2. Check text channel name (e.g. #helsinki -> matches HELSINKI)
+  // 3. Check text channel name (e.g. #helsinki -> matches HELSINKI)
   const channelNameClean = textChannel.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (channelNameClean === currentGateway) {
     return true;
   }
   
   // If the channel name is matching *another* known gateway, we are NOT the target
-  const knownGateways = ['HELSINKI', 'NUREMBERG'];
+  const knownGateways = ['HELSINKI', 'NUREMBERG', 'XPS'];
   if (knownGateways.includes(channelNameClean) && channelNameClean !== currentGateway) {
     return false;
   }
 
-  // 3. Check explicitly chosen option "gateway"
-  let chosenGateway = null;
-  try {
-    chosenGateway = interaction.options.getString('gateway');
-    if (chosenGateway) {
-      return chosenGateway.toUpperCase() === currentGateway;
-    }
-  } catch (e) {}
-
-  // 4. Default: If run in general and no option is specified, let HELSINKI act as default responder to explain
+  // 4. Default: If run in general and no option is specified, let XPS act as default responder to explain
   if (!chosenGateway && !channelGateway) {
-    return currentGateway === 'HELSINKI';
+    return currentGateway === 'XPS';
   }
 
   return false;
@@ -504,6 +513,32 @@ async function handleAgentCommand(interaction) {
   // Target Gateway resolution & validation
   const chosenGateway = interaction.options.getString('gateway');
   const { gateway: inferredGateway, project: inferredProject } = resolveGatewayAndProject(channel);
+
+  // 1. If inside the root status/gateway channel (e.g. #xps)
+  if (channel.name.toLowerCase() === currentGateway.toLowerCase() && !channel.parentId) {
+    if (chosenGateway && chosenGateway.toUpperCase() !== currentGateway) {
+      return interaction.editReply({
+        content: `❌ **Invalid Gateway:** Inside the status channel <#${channel.id}>, the gateway is locked to **${currentGateway}**. You cannot target a different gateway here.`
+      });
+    }
+  }
+
+  // 2. If inside a project channel under current category (e.g. category name ends with " GATEWAY")
+  const parentCategory = channel.parent;
+  const isProjectChannel = parentCategory && parentCategory.name === `${currentGateway} GATEWAY` && channel.type === ChannelType.GuildText;
+
+  if (isProjectChannel) {
+    if (chosenGateway && chosenGateway.toUpperCase() !== currentGateway) {
+      return interaction.editReply({
+        content: `❌ **Invalid Option:** Inside project-specific channels, the gateway is locked to **${currentGateway}**. Please omit the \`gateway\` option.`
+      });
+    }
+    if (directory) {
+      return interaction.editReply({
+        content: `❌ **Invalid Option:** Inside project-specific channels, the directory is locked to this project. Please omit the \`directory\` option.`
+      });
+    }
+  }
 
   if (!inferredGateway && !chosenGateway) {
     return interaction.editReply({
