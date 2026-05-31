@@ -335,14 +335,32 @@ client.on('messageCreate', async (message) => {
       } catch (e) {}
     }
   } else {
-    // Check if this thread has historical metadata for conversation resumption
+    // Check if this thread has historical metadata for conversation resumption or initial interactive run
     const meta = threadMetadata.get(threadId);
     if (meta) {
+      const isInitialRun = meta.hasStarted === false;
+
       try {
         await message.react('⚙️');
       } catch (e) {}
 
-      await message.channel.send(`🔄 **Resuming conversation session...**`);
+      if (isInitialRun) {
+        await message.channel.send(`🚀 **Starting agent session...**`);
+        
+        // Attempt to rename the thread to reflect the first prompt
+        try {
+          const newName = `[${meta.tool}] ${content.substring(0, 75)}`.trim();
+          await message.channel.setName(newName);
+        } catch (renameErr) {
+          console.warn('Failed to rename thread:', renameErr.message);
+        }
+
+        // Update metadata status
+        meta.hasStarted = true;
+        saveMetadata();
+      } else {
+        await message.channel.send(`🔄 **Resuming conversation session...**`);
+      }
 
       try {
         await processManager.startTask({
@@ -351,13 +369,13 @@ client.on('messageCreate', async (message) => {
           directory: meta.directory,
           mode: meta.mode,
           prompt: content,
-          isContinue: true,
-          previousHistoryText: meta.historyText || '',
+          isContinue: !isInitialRun,
+          previousHistoryText: isInitialRun ? '' : (meta.historyText || ''),
           model: meta.model,
           flags: meta.flags
         });
       } catch (err) {
-        await message.channel.send(`❌ **Failed to resume conversation:** ${err.message}`);
+        await message.channel.send(`❌ **Failed to start or resume task:** ${err.message}`);
       }
     }
   }
@@ -402,11 +420,14 @@ function isTargetForInteraction(interaction) {
   }
   if (!textChannel) return false;
 
+  let channelGateway = null;
   // 1. Check parent category name (e.g. "HELSINKI GATEWAY")
   const parentCategory = textChannel.parent;
   if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
-    const channelGateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
-    return channelGateway === currentGateway;
+    channelGateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
+    if (channelGateway === currentGateway) {
+      return true;
+    }
   }
 
   // 2. Check text channel name (e.g. #helsinki -> matches HELSINKI)
@@ -422,8 +443,9 @@ function isTargetForInteraction(interaction) {
   }
 
   // 3. Check explicitly chosen option "gateway"
+  let chosenGateway = null;
   try {
-    const chosenGateway = interaction.options.getString('gateway');
+    chosenGateway = interaction.options.getString('gateway');
     if (chosenGateway) {
       return chosenGateway.toUpperCase() === currentGateway;
     }
@@ -564,7 +586,10 @@ async function handleAgentCommand(interaction) {
 
   try {
     // 1. Initiate thread
-    const name = `[${tool}] ${taskPrompt.substring(0, 75)}`.trim();
+    const hasPrompt = !!(taskPrompt && taskPrompt.trim());
+    const name = hasPrompt
+      ? `[${tool}] ${taskPrompt.trim().substring(0, 75)}`.trim()
+      : `[${tool}] Interactive Session`;
     let thread;
 
     // Create new Thread on the resolved project channel
@@ -575,38 +600,52 @@ async function handleAgentCommand(interaction) {
     });
 
     // Send initial task header card
-    await thread.send(`### 🤖 Task Initiated
+    const promptDisplay = hasPrompt ? taskPrompt : '*Awaiting first prompt in thread...*';
+    await thread.send(`### 🤖 ${hasPrompt ? 'Task' : 'Interactive Session'} Initiated
 * **Tool:** \`${tool.toUpperCase()}\`
 * **Directory:** \`${resolvedDirectory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
-${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${taskPrompt}`);
+${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
 
     if (permissionWarning) {
       const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=105226685456&scope=bot%20applications.commands`;
       await thread.send(`⚠️ **Notice:** ${permissionWarning} Thread fell back to the current channel (<#${channel.id}>). To enable auto-channel creation for new projects under an **${categoryName}** category, please grant the bot the **Manage Channels** permission, or [click here to re-authorize the bot](${inviteUrl}).`);
     }
 
-    // 2. Start background task
-    await interaction.editReply({
-      content: `✅ Task thread created successfully in <#${targetChannel.id}>! Follow progress in: <#${thread.id}>`
-    });
+    if (hasPrompt) {
+      // 2. Start background task immediately
+      await interaction.editReply({
+        content: `✅ Task thread created successfully in <#${targetChannel.id}>! Follow progress in: <#${thread.id}>`
+      });
 
-    await thread.send('⚙️ Spawning process and initiating local sandbox environment...');
+      await thread.send('⚙️ Spawning process and initiating local sandbox environment...');
 
-    await processManager.startTask({
-      thread,
-      tool,
-      directory: resolvedDirectory,
-      mode,
-      prompt: taskPrompt,
-      model,
-      flags
-    });
+      await processManager.startTask({
+        thread,
+        tool,
+        directory: resolvedDirectory,
+        mode,
+        prompt: taskPrompt,
+        model,
+        flags
+      });
 
-    // Record thread session metadata for conversation resumption
-    threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags });
-    saveMetadata();
+      // Record thread session metadata for conversation resumption
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, hasStarted: true });
+      saveMetadata();
+    } else {
+      // 2. Await prompt from thread
+      await interaction.editReply({
+        content: `✅ Interactive session thread created successfully in <#${targetChannel.id}>! Follow progress in: <#${thread.id}>`
+      });
+
+      await thread.send('⌨️ **Gateway Awaiting First Prompt**\nPlease type your first task or question directly in this thread to initiate the agent process.');
+
+      // Record thread session metadata as not started
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, hasStarted: false });
+      saveMetadata();
+    }
 
   } catch (error) {
     console.error('Error starting agent task:', error);
@@ -686,45 +725,47 @@ async function handleStatusCommand(interaction) {
   } else {
     // Task has completed, show last session details
     tool = meta.tool.toUpperCase();
-    status = 'IDLE (Completed)';
+    status = meta.hasStarted === false ? 'AWAITING FIRST PROMPT' : 'IDLE (Completed)';
     directory = meta.directory;
     mode = meta.mode.toUpperCase();
     modelStr = meta.model || 'Default';
 
-    // Scan for the latest session log in the workspace
-    try {
-      const os = require('os');
-      let resolvedDir = directory;
-      if (directory.startsWith('~')) {
-        resolvedDir = path.join(os.homedir(), directory.substring(1));
-      }
+    if (meta.hasStarted !== false) {
+      // Scan for the latest session log in the workspace
+      try {
+        const os = require('os');
+        let resolvedDir = directory;
+        if (directory.startsWith('~')) {
+          resolvedDir = path.join(os.homedir(), directory.substring(1));
+        }
 
-      if (fs.existsSync(resolvedDir) && fs.statSync(resolvedDir).isDirectory()) {
-        const files = fs.readdirSync(resolvedDir)
-          .filter(f => f.startsWith(`.gateway-${meta.tool}-`) && f.endsWith('.log'));
+        if (fs.existsSync(resolvedDir) && fs.statSync(resolvedDir).isDirectory()) {
+          const files = fs.readdirSync(resolvedDir)
+            .filter(f => f.startsWith(`.gateway-${meta.tool}-`) && f.endsWith('.log'));
 
-        if (files.length > 0) {
-          files.sort((a, b) => b.localeCompare(a)); // Sort latest first
-          logFile = path.join(resolvedDir, files[0]);
+          if (files.length > 0) {
+            files.sort((a, b) => b.localeCompare(a)); // Sort latest first
+            logFile = path.join(resolvedDir, files[0]);
 
-          if (fs.existsSync(logFile)) {
-            const logs = fs.readFileSync(logFile, 'utf8');
+            if (fs.existsSync(logFile)) {
+              const logs = fs.readFileSync(logFile, 'utf8');
 
-            const quotaMatch = logs.match(/cost|quota|price|charge.*\$([\d\.]+)/i) || logs.match(/([\$0-9\.]+)\s*(?:credits|dollars)/i);
-            if (quotaMatch) quotaInfo = quotaMatch[0];
+              const quotaMatch = logs.match(/cost|quota|price|charge.*\$([\d\.]+)/i) || logs.match(/([\$0-9\.]+)\s*(?:credits|dollars)/i);
+              if (quotaMatch) quotaInfo = quotaMatch[0];
 
-            const tokenMatch = logs.match(/tokens used\s*\n\s*([\d,]+)/i) || logs.match(/(\d+)\s*(?:total\s*)?tokens/i) || logs.match(/tokens?:\s*(\d+)/i);
-            if (tokenMatch) {
-              tokenInfo = `${parseInt(tokenMatch[1].replace(/,/g, ''), 10).toLocaleString()} tokens`;
+              const tokenMatch = logs.match(/tokens used\s*\n\s*([\d,]+)/i) || logs.match(/(\d+)\s*(?:total\s*)?tokens/i) || logs.match(/tokens?:\s*(\d+)/i);
+              if (tokenMatch) {
+                tokenInfo = `${parseInt(tokenMatch[1].replace(/,/g, ''), 10).toLocaleString()} tokens`;
+              }
+
+              const subagentMatch = logs.match(/(?:spawned|active)\s*(?:subagent|agent)\s*["']?([a-zA-Z0-9_-]+)["']?/i) || logs.match(/subagent\s+(\w+)/i);
+              if (subagentMatch) subagentInfo = subagentMatch[0];
             }
-
-            const subagentMatch = logs.match(/(?:spawned|active)\s*(?:subagent|agent)\s*["']?([a-zA-Z0-9_-]+)["']?/i) || logs.match(/subagent\s+(\w+)/i);
-            if (subagentMatch) subagentInfo = subagentMatch[0];
           }
         }
+      } catch (e) {
+        console.error('Error scanning completed logs for status:', e);
       }
-    } catch (e) {
-      console.error('Error scanning completed logs for status:', e);
     }
   }
 

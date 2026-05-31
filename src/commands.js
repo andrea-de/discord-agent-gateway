@@ -7,7 +7,7 @@ const commands = [
     .addStringOption(option =>
       option.setName('task')
         .setDescription('Explain the task or prompt for the agent to execute')
-        .setRequired(true)
+        .setRequired(false)
     )
     .addStringOption(option =>
       option.setName('directory')
@@ -50,7 +50,7 @@ const commands = [
     .addStringOption(option =>
       option.setName('task')
         .setDescription('Explain the task or prompt for the agent to execute')
-        .setRequired(true)
+        .setRequired(false)
     )
     .addStringOption(option =>
       option.setName('directory')
