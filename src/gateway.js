@@ -995,5 +995,14 @@ processManager.on('taskEnded', (task) => {
   }
 });
 
+// Clean up metadata when a thread is deleted
+client.on('threadDelete', async (thread) => {
+  if (threadMetadata.has(thread.id)) {
+    console.log(`[Thread Delete] Cleaning up session metadata for thread ${thread.id}`);
+    threadMetadata.delete(thread.id);
+    saveMetadata();
+  }
+});
+
 // Bot token authorization login
 client.login(TOKEN);
