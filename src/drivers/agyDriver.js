@@ -102,7 +102,7 @@ class AgyDriver {
     return details;
   }
 
-  getArgs({ prompt, mode, isContinue, flags }) {
+  getArgs({ prompt, mode, isContinue, flags, directory }) {
     let args = [];
     
     if (mode === 'yolo') {
@@ -113,6 +113,10 @@ class AgyDriver {
     
     if (isContinue) {
       args.push('--continue');
+    }
+
+    if (directory) {
+      args.push('--add-dir', directory);
     }
 
     if (flags) {

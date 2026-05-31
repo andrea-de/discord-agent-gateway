@@ -65,7 +65,7 @@ class ProcessManager extends EventEmitter {
 
     // 2. Prepare command and arguments
     const cmd = driver.getCommand();
-    const args = driver.getArgs({ prompt, mode, isContinue, model, flags });
+    const args = driver.getArgs({ prompt, mode, isContinue, model, flags, directory });
 
     // 3. Spawn process
     const spawnEnv = { 

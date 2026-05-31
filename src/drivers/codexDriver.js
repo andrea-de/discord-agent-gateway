@@ -27,7 +27,7 @@ class CodexDriver {
     return details;
   }
 
-  getArgs({ prompt, mode, isContinue, model, flags }) {
+  getArgs({ prompt, mode, isContinue, model, flags, directory }) {
     let args = [];
 
     if (isContinue) {
@@ -54,6 +54,10 @@ class CodexDriver {
         args.push('-m', model);
       }
       args.push(prompt);
+    }
+
+    if (directory) {
+      args.push('-C', directory);
     }
 
     if (flags) {
