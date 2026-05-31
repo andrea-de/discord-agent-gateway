@@ -31,20 +31,18 @@ class CodexDriver {
     let args = [];
 
     if (isContinue) {
-      // Resume session
-      args = ['resume', '--last', '--no-alt-screen'];
+      // Resume session non-interactively
+      args = ['exec', 'resume', '--last'];
       if (mode === 'yolo') {
-        args.push('-a', 'never', '--dangerously-bypass-approvals-and-sandbox');
-      } else {
-        args.push('-a', 'untrusted');
+        args.push('--dangerously-bypass-approvals-and-sandbox');
       }
       if (model) {
         args.push('-m', model);
       }
       args.push(prompt);
     } else {
-      // Start fresh session
-      args = ['--no-alt-screen'];
+      // Start fresh session non-interactively
+      args = ['exec'];
       if (mode === 'yolo') {
         args.push('-a', 'never', '--dangerously-bypass-approvals-and-sandbox');
       } else {
