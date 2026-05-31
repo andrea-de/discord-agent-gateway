@@ -92,6 +92,58 @@ client.once('ready', async () => {
   } else {
     console.error('Failed to register slash commands.');
   }
+
+  // Auto-provision Category and Gateway Channel on startup, and post online status message
+  if (GUILD_ID) {
+    try {
+      const guild = await client.guilds.fetch(GUILD_ID);
+      if (guild) {
+        const categoryName = `${currentGateway} GATEWAY`;
+        const channelName = currentGateway.toLowerCase();
+        
+        // 1. Find or create the Category
+        let category = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
+        if (!category) {
+          try {
+            category = await guild.channels.create({
+              name: categoryName,
+              type: ChannelType.GuildCategory
+            });
+            console.log(`Created category "${categoryName}" on startup.`);
+          } catch (catErr) {
+            console.warn(`Could not create category "${categoryName}" on startup:`, catErr.message);
+          }
+        }
+        
+        // 2. Find or create the Gateway text channel (e.g. #home)
+        let gatewayChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
+        if (!gatewayChannel) {
+          try {
+            const channelOpts = {
+              name: channelName,
+              type: ChannelType.GuildText,
+              reason: `Gateway startup auto-provision`
+            };
+            if (category) {
+              channelOpts.parent = category.id;
+            }
+            gatewayChannel = await guild.channels.create(channelOpts);
+            console.log(`Created gateway channel "#${channelName}" on startup.`);
+          } catch (chanErr) {
+            console.warn(`Could not create gateway channel "#${channelName}" on startup:`, chanErr.message);
+          }
+        }
+        
+        // 3. Post online message
+        if (gatewayChannel) {
+          await gatewayChannel.send(`🟢 **Agent Gateway [${currentGateway}] is online and ready to receive tasks.**\nAll commands run inside this category or channel will automatically target this instance.`);
+          console.log(`Sent startup online message to #${channelName}.`);
+        }
+      }
+    } catch (err) {
+      console.warn('Startup category/channel auto-provisioning failed:', err.message);
+    }
+  }
   
   console.log('Gateway is ready to receive tasks.');
 });
