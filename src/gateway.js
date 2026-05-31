@@ -1056,8 +1056,7 @@ async function handleUsageCommand(interaction) {
 processManager.on('taskEnded', (task) => {
   const meta = threadMetadata.get(task.threadId);
   if (meta) {
-    const { stripDuplicatePrefix } = require('./parser');
-    const finalNewContent = stripDuplicatePrefix(task.previousHistoryText, task.processStdoutAccumulator);
+    const finalNewContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator);
     
     // Append the new content of this run to the session history
     meta.historyText = ((task.previousHistoryText || '') + '\n' + finalNewContent).trim();
