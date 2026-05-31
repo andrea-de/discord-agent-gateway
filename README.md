@@ -156,21 +156,26 @@ To resolve this issue:
 
 #### Option A: Allow Bubblewrap specifically via AppArmor (Recommended)
 You can permit Bubblewrap to use namespaces without disabling system-wide protections:
-1. Create a profile file:
+1. **Identify the correct path to `bwrap`**:
+   The binary might be at `/usr/bin/bwrap` or bundled inside your global node modules. Run:
+   ```bash
+   which bwrap || find /usr -name bwrap 2>/dev/null
+   ```
+2. **Create/Edit the profile file**:
    ```bash
    sudo nano /etc/apparmor.d/bwrap
    ```
-2. Add the following content (ensure the path matches `which bwrap`):
+3. **Add the following content** (Ensure the path after `profile bwrap` matches the path found in step 1):
    ```text
    abi <abi/4.0>,
    include <tunables/global>
 
-   profile bwrap /usr/bin/bwrap flags=(unconfined) {
+   profile bwrap /path/to/your/bwrap flags=(unconfined) {
      userns,
      include if exists <local/bwrap>
    }
    ```
-3. Reload AppArmor:
+4. **Reload AppArmor**:
    ```bash
    sudo systemctl reload apparmor
    ```
