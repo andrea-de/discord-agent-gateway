@@ -44,9 +44,7 @@ class CodexDriver {
       // Start fresh session non-interactively
       args = ['exec'];
       if (mode === 'yolo') {
-        args.push('-a', 'never', '--dangerously-bypass-approvals-and-sandbox');
-      } else {
-        args.push('-a', 'untrusted');
+        args.push('--dangerously-bypass-approvals-and-sandbox');
       }
       if (model) {
         args.push('-m', model);
