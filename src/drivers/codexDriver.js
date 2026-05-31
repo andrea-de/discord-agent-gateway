@@ -84,7 +84,21 @@ class CodexDriver {
   }
 
   stripDuplicateHistory(oldText, newText) {
-    return stripDuplicatePrefix(oldText, newText);
+    // 1. Extract only the actual response block (after the header and 'codex' prompt)
+    const match = newText.match(/(?:^|[\s\S]*?\n)(?:user\b[\s\S]*?\bcodex\s*\n)([\s\S]*)/i);
+    if (!match) {
+      // Suppress all header outputs before the prompt boundary
+      return '';
+    }
+
+    let cleaned = match[1];
+
+    // 2. Strip out the 'tokens used' summary at the end
+    cleaned = cleaned.replace(/tokens used\s*\n\s*[\d,]+/i, '').trim();
+
+    // 3. Strip duplicate history (for continuation sessions)
+    const { stripDuplicatePrefix } = require('../parser');
+    return stripDuplicatePrefix(oldText, cleaned);
   }
 
   /**
