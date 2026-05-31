@@ -101,8 +101,11 @@ client.once('ready', async () => {
         const categoryName = `${currentGateway} GATEWAY`;
         const channelName = currentGateway.toLowerCase();
         
+        // Fetch all channels from Discord API directly to prevent cache misses
+        const channels = await guild.channels.fetch();
+        
         // 1. Find or create the Category
-        let category = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
+        let category = channels.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
         if (!category) {
           try {
             category = await guild.channels.create({
@@ -116,7 +119,7 @@ client.once('ready', async () => {
         }
         
         // 2. Find or create the Gateway text channel (e.g. #home)
-        let gatewayChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
+        let gatewayChannel = channels.find(c => c.name === channelName && c.type === ChannelType.GuildText);
         if (!gatewayChannel) {
           try {
             const channelOpts = {
@@ -128,6 +131,13 @@ client.once('ready', async () => {
             console.log(`Created gateway channel "#${channelName}" on startup.`);
           } catch (chanErr) {
             console.warn(`Could not create gateway channel "#${channelName}" on startup:`, chanErr.message);
+          }
+        } else if (gatewayChannel.parentId) {
+          try {
+            await gatewayChannel.setParent(null);
+            console.log(`Moved gateway channel "#${channelName}" to root text channels on startup.`);
+          } catch (moveErr) {
+            console.warn(`Could not move gateway channel "#${channelName}" to root:`, moveErr.message);
           }
         }
         
