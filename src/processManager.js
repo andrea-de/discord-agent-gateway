@@ -31,7 +31,7 @@ class ProcessManager extends EventEmitter {
   /**
    * Spawns a new agent process for a given Discord thread.
    */
-  async startTask({ thread, tool, directory, mode, prompt, isContinue = false, previousHistoryText = '', model, flags }) {
+  async startTask({ thread, tool, directory, mode, prompt, isContinue = false, previousHistoryText = '', model, flags, sandbox }) {
     const threadId = thread.id;
     
     // Resolve home directory tilde if present
@@ -65,7 +65,7 @@ class ProcessManager extends EventEmitter {
 
     // 2. Prepare command and arguments
     const cmd = driver.getCommand();
-    const args = driver.getArgs({ prompt, mode, isContinue, model, flags, directory });
+    const args = driver.getArgs({ prompt, mode, isContinue, model, flags, directory, sandbox });
 
     // 3. Spawn process
     const spawnEnv = { 
@@ -92,6 +92,7 @@ class ProcessManager extends EventEmitter {
       prompt,
       model,
       flags,
+      sandbox,
       driver,
       process: child,
       startTime: new Date(),
@@ -104,6 +105,8 @@ class ProcessManager extends EventEmitter {
       previousHistoryText,
       processStdoutAccumulator: '',
       flushedNewContentLength: 0,
+      sentMessages: [],
+      lastFlushedContent: '',
       exitCode: null,
       inactivityTimer: null,
       flushTimer: null,
@@ -159,16 +162,6 @@ Time: ${taskContext.startTime.toISOString()}
     task.promptBuffer += cleanStr;
     task.lastOutputTime = Date.now();
 
-    // Compute actual new content since previous turns
-    const newContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator);
-    
-    // Extract chunk not yet flushed to Discord
-    const flushedLen = task.flushedNewContentLength || 0;
-    if (newContent.length > flushedLen) {
-      const chunk = newContent.substring(flushedLen);
-      task.stdoutBuffer += chunk;
-      task.flushedNewContentLength = newContent.length;
-    }
 
     // If YOLO mode or the tool is non-interactive, we do not need prompt parsing
     if (task.mode === 'yolo' || !task.driver.isInteractive()) {
@@ -190,76 +183,80 @@ Time: ${taskContext.startTime.toISOString()}
    * Emulates a rolling visual terminal block.
    */
   async flushLogsToDiscord(task) {
-    if (!task.stdoutBuffer) return;
+    const newContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator || '');
+    if (!newContent.trim()) return;
+    if (newContent === task.lastFlushedContent) return;
+    task.lastFlushedContent = newContent;
 
-    let textToFlush = task.stdoutBuffer;
-    task.stdoutBuffer = ''; // Clear buffer
+    const pages = [];
+    let remaining = newContent;
+    const limit = 3700;
 
-    // Embed descriptions support up to 4000 characters.
-    const maxMsgLength = 3900; 
-
-    // Split text into chunks that fit Discord's limits
-    const chunks = [];
-    while (textToFlush.length > 0) {
-      if (textToFlush.length <= maxMsgLength) {
-        chunks.push(textToFlush);
+    while (remaining.length > 0) {
+      if (remaining.length <= limit) {
+        pages.push(remaining);
         break;
       }
-      
-      // Attempt to split at a double newline (paragraph/table boundary)
-      let splitIndex = textToFlush.lastIndexOf('\n\n', maxMsgLength);
-      if (splitIndex <= 0) {
-        // Fallback to single newline
-        splitIndex = textToFlush.lastIndexOf('\n', maxMsgLength);
+
+      let splitIdx = remaining.lastIndexOf('\n\n', limit);
+      if (splitIdx <= 0) {
+        splitIdx = remaining.lastIndexOf('\n', limit);
       }
-      if (splitIndex <= 0) {
-        // Fallback to space
-        splitIndex = textToFlush.lastIndexOf(' ', maxMsgLength);
+      if (splitIdx <= 0) {
+        splitIdx = remaining.lastIndexOf(' ', limit);
       }
-      if (splitIndex <= 0) {
-        // Hard split if no whitespace at all
-        splitIndex = maxMsgLength;
+      if (splitIdx <= 0) {
+        splitIdx = limit;
       }
-      
-      chunks.push(textToFlush.substring(0, splitIndex));
-      textToFlush = textToFlush.substring(splitIndex).replace(/^\n+/, '');
+
+      let pageContent = remaining.substring(0, splitIdx);
+      let nextContent = remaining.substring(splitIdx);
+
+      // Check if we are inside a code block (odd count of triple backticks)
+      const backtickCount = (pageContent.match(/```/g) || []).length;
+      if (backtickCount % 2 !== 0) {
+        pageContent += '\n```';
+        nextContent = '```diff\n' + nextContent.replace(/^\n+/, '');
+      }
+
+      pages.push(pageContent);
+      remaining = nextContent;
     }
 
-    for (const chunk of chunks) {
-      if (chunk.trim().length === 0) continue;
-      
-      try {
-        let lastMsg = task.lastLogMessage;
-        
-        const authorName = task.tool === 'agy' ? 'Antigravity CLI' : 'Codex CLI';
-        const authorIcon = task.tool === 'agy' 
-          ? 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Google_Gemini_logo.svg/120px-Google_Gemini_logo.svg.png'
-          : 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/120px-OpenAI_Logo.svg.png';
+    const authorName = task.tool === 'agy' ? 'Antigravity CLI' : 'Codex CLI';
+    const authorIcon = task.tool === 'agy' 
+      ? 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Google_Gemini_logo.svg/120px-Google_Gemini_logo.svg.png'
+      : 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/120px-OpenAI_Logo.svg.png';
 
-        // Attempt to edit last message's embed to append the new text chunk
-        if (lastMsg && lastMsg.embeds && lastMsg.embeds.length > 0 &&
-            (lastMsg.embeds[0].description.length + chunk.length < maxMsgLength)) {
-          const updatedContent = lastMsg.embeds[0].description + chunk;
-          const newEmbed = EmbedBuilder.from(lastMsg.embeds[0])
-            .setDescription(updatedContent);
-          
-          await lastMsg.edit({ embeds: [newEmbed] });
+    if (!task.sentMessages) {
+      task.sentMessages = [];
+    }
+
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      if (page.trim().length === 0) continue;
+
+      const embed = new EmbedBuilder()
+        .setColor('#2b2d31') // Premium Slate Gray
+        .setAuthor({ name: authorName, iconURL: authorIcon })
+        .setDescription(page);
+
+      try {
+        if (task.sentMessages[i]) {
+          await task.sentMessages[i].edit({ embeds: [embed] });
         } else {
-          // Send new message with a new embed panel
-          const embed = new EmbedBuilder()
-            .setColor('#2b2d31') // Premium Slate Gray
-            .setAuthor({ name: authorName, iconURL: authorIcon })
-            .setDescription(chunk);
-          
           const sentMsg = await task.thread.send({ embeds: [embed] });
-          task.lastLogMessage = sentMsg;
+          task.sentMessages.push(sentMsg);
         }
       } catch (err) {
-        console.error('Failed to flush log chunk to Discord:', err);
-        // Fallback: send fresh text message if embeds fail
+        console.error(`Failed to flush log page ${i} to Discord:`, err);
         try {
-          const sentMsg = await task.thread.send(chunk);
-          task.lastLogMessage = sentMsg;
+          if (task.sentMessages[i]) {
+            await task.sentMessages[i].edit({ content: page, embeds: [] });
+          } else {
+            const sentMsg = await task.thread.send({ content: page });
+            task.sentMessages.push(sentMsg);
+          }
         } catch (subErr) {
           console.error('Fallback send failed:', subErr);
         }

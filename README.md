@@ -107,11 +107,11 @@ Gateway is ready to receive tasks.
 
 ## 📖 Command Guide & Interaction Flow
 
-### 1. Starting a Task (`/agy` or `/codex`)
+### 1. Starting a Task (`/antigravity` or `/codex`)
 Instead of a generic `/agent` command, you run the slash command for the tool you want to invoke. This exposes optional parameters to configure the execution environment or pass custom flags directly.
 
 * **Commands:**
-  * `/agy`: Spawns a Google Antigravity CLI process.
+  * `/antigravity`: Spawns a Google Antigravity CLI process.
   * `/codex`: Spawns an OpenAI Codex CLI process.
 * **Options:**
   * `directory` (Required): Absolute path to a valid local directory.
@@ -125,7 +125,7 @@ Instead of a generic `/agent` command, you run the slash command for the tool yo
 ---
 
 ### 2. Output Streaming & Interaction
-When a task starts, the bot generates a dynamic Discord thread (named like `[agy] Fix canvas physics layout...`). Inside this thread:
+When a task starts, the bot generates a dynamic Discord thread (named like `[antigravity] Fix canvas physics layout...`). Inside this thread:
 
 * **Virtual Rolling Terminal:** Logs stream into code blocks. The bot edits the last log message sequentially up to the 2000-character limit before creating a new message block, preventing chat flood.
 * **Component Buttons:** When an agent pauses to ask for approval or multiple-choice inputs, the bot blocks further execution and renders native Discord buttons mapped to choice values. Clicking a button injects the option cleanly into the agent's `stdin`.
@@ -139,3 +139,48 @@ When a task starts, the bot generates a dynamic Discord thread (named like `[agy
 * `/usage`: Displays overall token usage for the current billing cycle, remaining quota balance, cycle reset date, and individual tool usage breakdown.
 * `/export`: Saves a Markdown transcription of the thread history into your local project workspace.
 * `/kill`: Terminates the running process (`SIGTERM` -> `SIGKILL`) and archives the thread.
+
+---
+
+## 🔒 Understanding & Troubleshooting the Sandbox
+
+The agent tools run in isolated configurations to protect your host system:
+* **Antigravity (`antigravity`)**: Employs app-level restrictions when running with `--sandbox`.
+* **Codex (`codex`)**: Uses **Bubblewrap** (`bwrap`) on Linux to isolate shell commands. It creates a private mount namespace (making the project directory writable and everything else read-only) and a private network namespace (blocking external internet access).
+
+### Error: `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`
+
+This error occurs when Bubblewrap tries to initialize the local network loopback interface (`lo`) inside the restricted namespace. Newer versions of Ubuntu (24.04+), Debian, or nested container environments restrict unprivileged user namespaces from modifying network interfaces by default.
+
+To resolve this issue:
+
+#### Option A: Allow Bubblewrap specifically via AppArmor (Recommended)
+You can permit Bubblewrap to use namespaces without disabling system-wide protections:
+1. Create a profile file:
+   ```bash
+   sudo nano /etc/apparmor.d/bwrap
+   ```
+2. Add the following content (ensure the path matches `which bwrap`):
+   ```text
+   abi <abi/4.0>,
+   include <tunables/global>
+
+   profile bwrap /usr/bin/bwrap flags=(unconfined) {
+     userns,
+     include if exists <local/bwrap>
+   }
+   ```
+3. Reload AppArmor:
+   ```bash
+   sudo systemctl reload apparmor
+   ```
+
+#### Option B: Temporary sysctl Workaround
+Disable unprivileged user namespace restrictions system-wide (quickest way to test):
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+#### Option C: Bypassing via Command Option
+When executing a task via the Discord slash commands, select **`Danger: Full Access`** for `/codex`'s `sandbox` option, or do not enable the `sandbox` option for `/antigravity`. This disables Bubblewrap/sandboxing and runs commands directly on the host using your user permissions.
+

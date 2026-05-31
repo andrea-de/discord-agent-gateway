@@ -102,7 +102,7 @@ class AgyDriver {
     return details;
   }
 
-  getArgs({ prompt, mode, isContinue, flags, directory }) {
+  getArgs({ prompt, mode, isContinue, flags, directory, sandbox }) {
     let args = [];
     
     if (mode === 'yolo') {
@@ -117,6 +117,10 @@ class AgyDriver {
 
     if (directory) {
       args.push('--add-dir', directory);
+    }
+
+    if (sandbox === true) {
+      args.push('--sandbox');
     }
 
     if (flags) {

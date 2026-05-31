@@ -153,6 +153,7 @@ client.once('ready', async () => {
   }
   
   console.log('Gateway is ready to receive tasks.');
+  performSandboxDiagnostics();
 });
 
 /**
@@ -167,7 +168,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'agy' || commandName === 'codex') {
+  if (commandName === 'antigravity' || commandName === 'codex') {
     await handleAgentCommand(interaction);
   } else if (commandName === 'status') {
     await handleStatusCommand(interaction);
@@ -175,6 +176,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleUsageCommand(interaction);
   } else if (commandName === 'model') {
     await handleModelCommand(interaction);
+  } else if (commandName === 'sandbox') {
+    await handleSandboxCommand(interaction);
   } else if (commandName === 'export') {
     await handleExportCommand(interaction);
   } else if (commandName === 'kill') {
@@ -196,7 +199,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'agy' || commandName === 'codex') {
+  if (commandName === 'antigravity' || commandName === 'codex') {
     const focusedOption = interaction.options.getFocused(true);
     if (focusedOption.name === 'directory') {
       const channel = interaction.channel;
@@ -395,7 +398,8 @@ client.on('messageCreate', async (message) => {
           isContinue: !isInitialRun,
           previousHistoryText: isInitialRun ? '' : (meta.historyText || ''),
           model: meta.model,
-          flags: meta.flags
+          flags: meta.flags,
+          sandbox: meta.sandbox
         });
       } catch (err) {
         await message.channel.send(`❌ **Failed to start or resume task:** ${err.message}`);
@@ -491,12 +495,18 @@ function isTargetForInteraction(interaction) {
  * COMMAND HANDLER: /agent
  */
 async function handleAgentCommand(interaction) {
-  const tool = interaction.commandName;
+  let tool = interaction.commandName;
+  if (tool === 'antigravity') {
+    tool = 'agy';
+  }
   const directory = interaction.options.getString('directory');
   const taskPrompt = interaction.options.getString('task');
   const mode = interaction.options.getString('mode') || 'review';
   const model = interaction.options.getString('model') || null;
   const flags = interaction.options.getString('flags') || null;
+  const sandbox = tool === 'agy'
+    ? (interaction.options.getBoolean('sandbox') ?? null)
+    : (interaction.options.getString('sandbox') ?? null);
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -711,11 +721,12 @@ ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
         mode,
         prompt: taskPrompt,
         model,
-        flags
+        flags,
+        sandbox
       });
 
       // Record thread session metadata for conversation resumption
-      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, hasStarted: true });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: true });
       saveMetadata();
     } else {
       // 2. Await prompt from thread
@@ -726,7 +737,7 @@ ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
       await thread.send('⌨️ **Gateway Awaiting First Prompt**\nPlease type your first task or question directly in this thread to initiate the agent process.');
 
       // Record thread session metadata as not started
-      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, hasStarted: false });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: false });
       saveMetadata();
     }
 
@@ -765,6 +776,7 @@ async function handleStatusCommand(interaction) {
   let logFile = 'None';
   let mode = '';
   let modelStr = 'Default';
+  let sandboxVal = 'Default';
   
   let quotaInfo = 'Not reported by tool';
   let tokenInfo = 'Not reported by tool';
@@ -779,6 +791,7 @@ async function handleStatusCommand(interaction) {
     logFile = task.fullLogFile;
     mode = task.mode.toUpperCase();
     modelStr = task.model || 'Default';
+    sandboxVal = task.sandbox !== undefined && task.sandbox !== null ? String(task.sandbox) : 'Default';
 
     try {
       if (fs.existsSync(task.fullLogFile)) {
@@ -812,6 +825,7 @@ async function handleStatusCommand(interaction) {
     directory = meta.directory;
     mode = meta.mode.toUpperCase();
     modelStr = meta.model || 'Default';
+    sandboxVal = meta.sandbox !== undefined && meta.sandbox !== null ? String(meta.sandbox) : 'Default';
 
     if (meta.hasStarted !== false) {
       // Scan for the latest session log in the workspace
@@ -856,6 +870,7 @@ async function handleStatusCommand(interaction) {
 * **Tool:** \`${tool}\`
 * **Status:** \`${status}\`
 * **Model Configured:** \`${modelStr}\`
+* **Sandbox Policy:** \`${sandboxVal}\`
 * **Last Elapsed Execution Time:** \`${elapsedStr}\`
 * **Working Directory:** \`${directory}\`
 * **Last Log File:** \`${logFile}\`
@@ -952,6 +967,73 @@ async function handleModelCommand(interaction) {
     
     if (task) {
       response += `\n* **Active running process model:** \`${task.model || 'Default'}\``;
+    }
+    
+    return interaction.reply(response);
+  }
+}
+
+/**
+ * COMMAND HANDLER: /sandbox
+ */
+async function handleSandboxCommand(interaction) {
+  const threadId = interaction.channelId;
+  let newPolicy = interaction.options.getString('policy');
+  
+  const meta = threadMetadata.get(threadId);
+  const task = processManager.activeTasks.get(threadId);
+
+  if (!meta) {
+    return interaction.reply({
+      content: '❌ This channel is not a registered agent task thread.',
+      ephemeral: true
+    });
+  }
+
+  const isAgy = meta.tool === 'agy';
+
+  if (newPolicy !== null && newPolicy !== undefined) {
+    // Convert string choices to boolean for agy, or leave as string for codex
+    if (isAgy) {
+      if (newPolicy.toLowerCase() === 'true') {
+        newPolicy = true;
+      } else if (newPolicy.toLowerCase() === 'false') {
+        newPolicy = false;
+      } else {
+        return interaction.reply({
+          content: '❌ **Invalid Policy:** Antigravity (`agy`) sandbox policy must be either `true` or `false`.',
+          ephemeral: true
+        });
+      }
+    } else {
+      const allowedPolicies = ['workspace-write', 'read-only', 'danger-full-access'];
+      if (!allowedPolicies.includes(newPolicy.toLowerCase())) {
+        return interaction.reply({
+          content: `❌ **Invalid Policy:** Codex sandbox policy must be one of: \`${allowedPolicies.join(', ')}\`.`,
+          ephemeral: true
+        });
+      }
+    }
+
+    const oldPolicy = meta.sandbox !== undefined && meta.sandbox !== null ? String(meta.sandbox) : 'Default';
+    meta.sandbox = newPolicy;
+    saveMetadata();
+
+    let response = `✅ **Sandbox policy updated successfully!**\n* **Thread Sandbox Policy:** \`${oldPolicy}\` ➔ \`${newPolicy}\`\nThis sandbox policy will be used for subsequent continuation runs in this thread.`;
+    
+    if (task) {
+      const activePolicy = task.sandbox !== undefined && task.sandbox !== null ? String(task.sandbox) : 'Default';
+      response += `\n\n⚠️ *Note: An active process is currently running with sandbox policy \`${activePolicy}\`. The new policy will take effect once the current task finishes and a new one is resumed.*`;
+    }
+
+    return interaction.reply(response);
+  } else {
+    const currentPolicy = meta.sandbox !== undefined && meta.sandbox !== null ? String(meta.sandbox) : 'Default';
+    let response = `🔒 **Current thread sandbox policy configuration:** \`${currentPolicy}\``;
+    
+    if (task) {
+      const activePolicy = task.sandbox !== undefined && task.sandbox !== null ? String(task.sandbox) : 'Default';
+      response += `\n* **Active running process sandbox policy:** \`${activePolicy}\``;
     }
     
     return interaction.reply(response);
@@ -1315,6 +1397,35 @@ client.on('threadDelete', async (thread) => {
     saveMetadata();
   }
 });
+
+// Perform a quick check on startup to diagnose sandbox issues
+async function performSandboxDiagnostics() {
+  const { exec } = require('child_process');
+  
+  exec('codex --version', (err, stdout, stderr) => {
+    if (err) {
+      console.warn('⚠️  [Diagnostics] Codex CLI does not seem to be installed or available in PATH.');
+      return;
+    }
+    
+    exec('codex sandbox linux true', (sandboxErr, sandboxStdout, sandboxStderr) => {
+      if (sandboxErr) {
+        console.warn('\n======================================================================');
+        console.warn('⚠️  [Diagnostics] Codex Linux sandbox (Bubblewrap) is failing on this host!');
+        console.warn(`Reason: ${sandboxStderr.trim()}`);
+        console.warn('\nTo resolve this issue, please do one of the following:');
+        console.warn('1. Run tasks with the slash command option \`sandbox: Danger: Full Access\` (skips bubblewrap).');
+        console.warn('2. Disable unprivileged user namespace restrictions on your host system:');
+        console.warn('   sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0');
+        console.warn('3. (Recommended for Ubuntu/Debian) Configure AppArmor to allow Bubblewrap:');
+        console.warn('   See the README Troubleshooting section for instructions.');
+        console.warn('======================================================================\\n');
+      } else {
+        console.log('✅ [Diagnostics] Codex Linux sandbox (Bubblewrap) test passed successfully.');
+      }
+    });
+  });
+}
 
 // Bot token authorization login
 client.login(TOKEN);

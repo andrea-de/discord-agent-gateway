@@ -2,7 +2,7 @@ const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('agy')
+    .setName('antigravity')
     .setDescription('Initiates an Antigravity task in a new thread')
     .addStringOption(option =>
       option.setName('task')
@@ -42,6 +42,11 @@ const commands = [
     .addStringOption(option =>
       option.setName('flags')
         .setDescription('Custom command-line flags (e.g. --sandbox)')
+        .setRequired(false)
+    )
+    .addBooleanOption(option =>
+      option.setName('sandbox')
+        .setDescription('Enable terminal restriction sandboxing for Antigravity')
         .setRequired(false)
     ),
 
@@ -85,8 +90,18 @@ const commands = [
     )
     .addStringOption(option =>
       option.setName('flags')
-        .setDescription('Custom command-line flags (e.g. --strict-config)')
+        .setDescription('Custom command-line flags')
         .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('sandbox')
+        .setDescription('Sandbox policy for shell commands (default: workspace-write)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Workspace Write (default)', value: 'workspace-write' },
+          { name: 'Read Only', value: 'read-only' },
+          { name: 'Danger: Full Access', value: 'danger-full-access' }
+        )
     ),
 
   new SlashCommandBuilder()
@@ -108,6 +123,22 @@ const commands = [
       option.setName('name')
         .setDescription('Specify LLM model name (e.g. gpt-4o, o3-mini)')
         .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('sandbox')
+    .setDescription('Gets or sets the sandbox policy for subsequent tasks in this thread')
+    .addStringOption(option =>
+      option.setName('policy')
+        .setDescription('Specify sandbox policy (e.g. workspace-write, danger-full-access, true, false)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Workspace Write (Codex)', value: 'workspace-write' },
+          { name: 'Read Only (Codex)', value: 'read-only' },
+          { name: 'Danger: Full Access (Codex)', value: 'danger-full-access' },
+          { name: 'True (Antigravity)', value: 'true' },
+          { name: 'False (Antigravity)', value: 'false' }
+        )
     ),
 
   new SlashCommandBuilder()
