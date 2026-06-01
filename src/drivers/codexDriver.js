@@ -1,6 +1,18 @@
 const { parsePrompts, stripDuplicatePrefix } = require('../parser');
 
 class CodexDriver {
+  constructor() {
+    this.discordResponseInstruction = [
+      '',
+      '---',
+      'Gateway response style:',
+      '- Keep Discord-facing progress and final responses concise.',
+      '- Use short bullets when listing changes, tests, blockers, or next steps.',
+      '- Avoid restating command output or logs unless it is needed to explain a result.',
+      '- Keep the final reply under 8 lines unless the user explicitly asks for detail.'
+    ].join('\n');
+  }
+
   getCommand() {
     return 'codex';
   }
@@ -28,22 +40,31 @@ class CodexDriver {
   }
 
   getArgs({ prompt, mode, isContinue, model, flags, directory, sandbox }) {
+    const bypassSandbox = mode === 'yolo' || sandbox === 'danger-full-access';
+    const effectivePrompt = this._withDiscordResponseInstruction(prompt);
+    const skipGitRepoCheck = this._shouldSkipGitRepoCheck(directory);
     let args = [];
 
     if (isContinue) {
       // Resume session non-interactively
       args = ['exec', 'resume', '--last'];
-      if (mode === 'yolo') {
+      if (bypassSandbox) {
         args.push('--dangerously-bypass-approvals-and-sandbox');
       }
       if (model) {
         args.push('-m', model);
       }
-      args.push(prompt);
+      if (flags) {
+        args.push(...this._parseFlags(flags));
+      }
+      if (skipGitRepoCheck) {
+        args.push('--skip-git-repo-check');
+      }
+      args.push(effectivePrompt);
     } else {
       // Start fresh session non-interactively
       args = ['exec'];
-      if (mode === 'yolo') {
+      if (bypassSandbox) {
         args.push('--dangerously-bypass-approvals-and-sandbox');
       } else {
         args.push('-s', sandbox || 'workspace-write');
@@ -51,29 +72,16 @@ class CodexDriver {
       if (model) {
         args.push('-m', model);
       }
-      args.push(prompt);
-    }
-
-    if (directory) {
-      if (!isContinue) {
+      if (directory) {
         args.push('-C', directory);
       }
-
-      const fs = require('fs');
-      const path = require('path');
-      const os = require('os');
-      let resolvedDir = directory;
-      if (directory.startsWith('~')) {
-        resolvedDir = path.join(os.homedir(), directory.substring(1));
+      if (flags) {
+        args.push(...this._parseFlags(flags));
       }
-      const isGit = fs.existsSync(path.join(resolvedDir, '.git'));
-      if (!isGit) {
+      if (skipGitRepoCheck) {
         args.push('--skip-git-repo-check');
       }
-    }
-
-    if (flags) {
-      args.push(...this._parseFlags(flags));
+      args.push(effectivePrompt);
     }
 
     return args;
@@ -114,12 +122,6 @@ class CodexDriver {
     if (tokensIndex !== -1) {
       cleaned = cleaned.substring(0, tokensIndex).trim();
     }
-
-    // Clean up raw CLI internal prompts and replace turn markers with visual separators
-    cleaned = cleaned.replace(/^\s*user\s*$/gm, '');
-    cleaned = cleaned.replace(/^\s*codex\s*$/gm, '\n---\n');
-    cleaned = cleaned.replace(/^\s*apply patch\s*$/gm, '');
-    cleaned = cleaned.replace(/^\s*patch: completed\s*$/gm, '');
 
     // Format exec blocks, apply patch blocks, and diff patches to be clean and concise
     const blockRegex = /(?:exec\r?\n([^\r\n]+)\r?\n\s*(succeeded in \d+ms:|failed with exit code \d+:)([\s\S]*?)(?=\r?\n(?:exec|codex|apply patch|tokens used)|$))|(?:apply patch\r?\npatch: [^\r\n]+\r?\n[^\r\n]+\r?\n)?(diff --git\s+[^\r\n]+[\s\S]*?)(?=\r?\n(?:exec|codex|apply patch|tokens used)|$)/gi;
@@ -197,6 +199,13 @@ class CodexDriver {
       return match;
     });
 
+    // Clean up raw CLI internal prompts and replace turn markers with visual separators.
+    // This must run after block formatting so exec parsing can stop at real turn markers.
+    cleaned = cleaned.replace(/^\s*user\s*$/gm, '');
+    cleaned = cleaned.replace(/^\s*codex\s*$/gm, '\n---\n');
+    cleaned = cleaned.replace(/^\s*apply patch\s*$/gm, '');
+    cleaned = cleaned.replace(/^\s*patch: completed\s*$/gm, '');
+
     // 3. Strip duplicate history (for continuation sessions)
     const { stripDuplicatePrefix } = require('../parser');
     return stripDuplicatePrefix(oldText, cleaned);
@@ -215,6 +224,25 @@ class CodexDriver {
       }
       return arg;
     });
+  }
+
+  _withDiscordResponseInstruction(prompt) {
+    if (!prompt) return this.discordResponseInstruction.trim();
+    if (prompt.includes('Gateway response style:')) return prompt;
+    return `${prompt.trimEnd()}\n${this.discordResponseInstruction}`;
+  }
+
+  _shouldSkipGitRepoCheck(directory) {
+    if (!directory) return false;
+
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    let resolvedDir = directory;
+    if (directory.startsWith('~')) {
+      resolvedDir = path.join(os.homedir(), directory.substring(1));
+    }
+    return !fs.existsSync(path.join(resolvedDir, '.git'));
   }
 }
 

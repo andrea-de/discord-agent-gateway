@@ -694,11 +694,15 @@ async function handleAgentCommand(interaction) {
 
     // Send initial task header card
     const promptDisplay = hasPrompt ? taskPrompt : '*Awaiting first prompt in thread...*';
+    const sandboxDisplay = tool === 'codex'
+      ? (sandbox || (mode === 'yolo' ? 'danger-full-access' : 'workspace-write'))
+      : (sandbox !== undefined && sandbox !== null ? sandbox : 'Default');
     await thread.send(`### 🤖 ${hasPrompt ? 'Task' : 'Interactive Session'} Initiated
 * **Tool:** \`${tool.toUpperCase()}\`
 * **Directory:** \`${resolvedDirectory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
+* **Sandbox Policy:** \`${sandboxDisplay}\`
 ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
 
     if (permissionWarning) {
@@ -935,7 +939,7 @@ async function handleKillCommand(interaction) {
  */
 async function handleModelCommand(interaction) {
   const threadId = interaction.channelId;
-  const newModelName = interaction.options.getString('name');
+  let newModelName = interaction.options.getString('name');
   
   const meta = threadMetadata.get(threadId);
   const task = processManager.activeTasks.get(threadId);
@@ -950,10 +954,16 @@ async function handleModelCommand(interaction) {
   if (newModelName) {
     // Setting a new model
     const oldModel = meta.model || 'Default';
-    meta.model = newModelName;
+    if (newModelName === '__default__') {
+      newModelName = null;
+      delete meta.model;
+    } else {
+      meta.model = newModelName;
+    }
     saveMetadata();
 
-    let response = `✅ **Model updated successfully!**\n* **Thread Model:** \`${oldModel}\` ➔ \`${newModelName}\`\nThis model will be used for subsequent continuation runs.`;
+    const newModelDisplay = newModelName || 'Default';
+    let response = `✅ **Model updated successfully!**\n* **Thread Model:** \`${oldModel}\` ➔ \`${newModelDisplay}\`\nThis model will be used for subsequent continuation runs.`;
     
     if (task) {
       response += `\n\n⚠️ *Note: An active process is currently running on model \`${task.model || 'Default'}\`. The new model will take effect once the current task finishes and a new one is resumed.*`;
@@ -1408,7 +1418,7 @@ async function performSandboxDiagnostics() {
       return;
     }
     
-    exec('codex sandbox linux true', (sandboxErr, sandboxStdout, sandboxStderr) => {
+    exec('codex sandbox true', (sandboxErr, sandboxStdout, sandboxStderr) => {
       if (sandboxErr) {
         console.warn('\n======================================================================');
         console.warn('⚠️  [Diagnostics] Codex Linux sandbox (Bubblewrap) is failing on this host!');

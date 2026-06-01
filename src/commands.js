@@ -1,5 +1,20 @@
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
+const CODEX_MODEL_CHOICES = [
+  { name: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
+  { name: 'GPT-5.1 Codex Max', value: 'gpt-5.1-codex-max' },
+  { name: 'GPT-5.1 Codex', value: 'gpt-5.1-codex' },
+  { name: 'GPT-5 Codex', value: 'gpt-5-codex' },
+  { name: 'GPT-5.2', value: 'gpt-5.2' },
+  { name: 'GPT-5.1', value: 'gpt-5.1' },
+  { name: 'GPT-5', value: 'gpt-5' },
+  { name: 'GPT-5 mini', value: 'gpt-5-mini' },
+  { name: 'GPT-5 nano', value: 'gpt-5-nano' },
+  { name: 'GPT-4.1', value: 'gpt-4.1' },
+  { name: 'GPT-4.1 mini', value: 'gpt-4.1-mini' },
+  { name: 'o4-mini', value: 'o4-mini' }
+];
+
 const commands = [
   new SlashCommandBuilder()
     .setName('antigravity')
@@ -87,6 +102,7 @@ const commands = [
       option.setName('model')
         .setDescription('Specify LLM model name (e.g. o3-mini)')
         .setRequired(false)
+        .addChoices(...CODEX_MODEL_CHOICES)
     )
     .addStringOption(option =>
       option.setName('flags')
@@ -121,8 +137,12 @@ const commands = [
     .setDescription('Gets or sets the LLM model for subsequent tasks in this thread')
     .addStringOption(option =>
       option.setName('name')
-        .setDescription('Specify LLM model name (e.g. gpt-4o, o3-mini)')
+        .setDescription('Select the Codex model for future runs in this thread')
         .setRequired(false)
+        .addChoices(
+          { name: 'Default', value: '__default__' },
+          ...CODEX_MODEL_CHOICES
+        )
     ),
 
   new SlashCommandBuilder()
