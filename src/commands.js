@@ -210,6 +210,19 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('rename')
+    .setDescription('Renames the current thread and optionally the agent session history')
+    .addStringOption(option =>
+      option.setName('name')
+        .setDescription('The new name for the thread')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('delete')
+    .setDescription('Deletes the current thread and cleans up session metadata'),
+
+  new SlashCommandBuilder()
     .setName('export')
     .setDescription('Exports this thread session log to a markdown file in the project directory'),
 

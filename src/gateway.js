@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const processManager = require('./processManager');
@@ -194,6 +194,10 @@ client.on('interactionCreate', async (interaction) => {
     await handlePermissionCommand(interaction);
   } else if (commandName === 'export') {
     await handleExportCommand(interaction);
+  } else if (commandName === 'rename') {
+    await handleRenameCommand(interaction);
+  } else if (commandName === 'delete') {
+    await handleDeleteCommand(interaction);
   } else if (commandName === 'kill') {
     await handleKillCommand(interaction);
   } else if (commandName === 'info') {
@@ -202,6 +206,82 @@ client.on('interactionCreate', async (interaction) => {
     await handleRestartCommand(interaction);
   }
 });
+
+/**
+ * Handle modal submissions
+ */
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isModalSubmit()) return;
+
+  if (interaction.customId === 'session-modal') {
+    await handleSessionModal(interaction);
+  }
+});
+
+async function handleSessionModal(interaction) {
+  const toolRaw = interaction.fields.getTextInputValue('tool').toLowerCase().trim();
+  const tool = toolRaw === 'antigravity' ? 'agy' : toolRaw;
+  const prompt = interaction.fields.getTextInputValue('prompt').trim();
+  
+  const { gateway, project: inferredProject } = resolveGatewayAndProject(interaction.channel);
+  
+  // Resolve directory (same logic as handleAgentCommand but simplified for the project channel context)
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  let resolvedDirectory = null;
+
+  if (PROJECTS_ROOT && inferredProject) {
+    const os = require('os');
+    let resolvedRoot = PROJECTS_ROOT;
+    if (PROJECTS_ROOT.startsWith('~')) {
+      resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+    }
+    const targetPath = path.join(resolvedRoot, inferredProject);
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+      resolvedDirectory = targetPath;
+    }
+  }
+
+  if (!resolvedDirectory) {
+    return interaction.reply({ content: '❌ Could not resolve directory for this project.', ephemeral: true });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const threadName = prompt ? `[${tool}] ${prompt.substring(0, 75)}` : `[${tool}] Interactive Session`;
+    const thread = await interaction.channel.threads.create({
+      name: threadName,
+      autoArchiveDuration: 1440,
+      reason: 'Agent Gateway Modal Start'
+    });
+
+    await thread.send(`### 🤖 Session Initiated via Dashboard
+* **Tool:** \`${tool.toUpperCase()}\`
+* **Directory:** \`${resolvedDirectory}\`
+* **Prompt:** ${prompt || '*Awaiting first prompt in thread...*'}`);
+
+    if (prompt) {
+      await thread.send('⚙️ Spawning process...');
+      await processManager.startTask({
+        thread,
+        tool,
+        directory: resolvedDirectory,
+        mode: 'review',
+        prompt: prompt
+      });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode: 'review', hasStarted: true });
+    } else {
+      await thread.send('⌨️ **Gateway Awaiting First Prompt**');
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode: 'review', hasStarted: false });
+    }
+    saveMetadata();
+
+    await interaction.editReply({ content: `✅ Session started in <#${thread.id}>` });
+  } catch (err) {
+    console.error('Modal task start failed:', err);
+    await interaction.editReply({ content: `❌ Failed to start session: ${err.message}` });
+  }
+}
 
 /**
  * Handle autocomplete interactions for directory suggestions
@@ -280,11 +360,20 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
   const customId = interaction.customId;
-  if (!customId.startsWith('choice:')) return;
+  if (customId.startsWith('choice:')) {
+    await handleChoiceButton(interaction);
+  } else if (customId.startsWith('project:')) {
+    await handleProjectButton(interaction);
+  } else if (customId.startsWith('thread:')) {
+    await handleThreadButton(interaction);
+  }
+  });
 
+  async function handleChoiceButton(interaction) {
+  const customId = interaction.customId;
   const value = customId.substring('choice:'.length);
   const threadId = interaction.channelId;
-
+  ...
   const task = processManager.activeTasks.get(threadId);
   if (!task) {
     return interaction.reply({
@@ -324,6 +413,45 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 });
+
+/**
+ * Handle button clicks for thread-specific management (delete, confirm-delete)
+ */
+async function handleThreadButton(interaction) {
+  const action = interaction.customId.substring('thread:'.length);
+  const channel = interaction.channel;
+
+  if (action === 'confirm-delete') {
+    if (!channel || !channel.isThread()) return;
+    
+    const threadId = channel.id;
+    
+    // 1. Notify
+    await interaction.update({ content: '🗑️ **Deleting thread and cleaning up metadata...**', components: [] });
+
+    // 2. Kill active task if any
+    const task = processManager.activeTasks.get(threadId);
+    if (task) {
+      await processManager.killTask(threadId);
+    }
+
+    // 3. Cleanup Metadata
+    if (threadMetadata.has(threadId)) {
+      threadMetadata.delete(threadId);
+      saveMetadata();
+    }
+
+    // 4. Delete Thread
+    try {
+      await channel.delete();
+    } catch (err) {
+      console.error('Failed to delete thread:', err);
+    }
+
+  } else if (action === 'cancel-delete') {
+    await interaction.update({ content: '✅ **Deletion cancelled.**', components: [] });
+  }
+}
 
 /**
  * Handle button interaction for project dashboards
@@ -594,10 +722,7 @@ async function handleAgentCommand(interaction) {
       if (PROJECTS_ROOT.startsWith('~')) {
         resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
       }
-      const targetPath = path.join(resolvedRoot, inferredProject);
-      if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
-        resolvedDirectory = targetPath;
-      }
+      resolvedDirectory = path.join(resolvedRoot, inferredProject);
     }
   }
 
@@ -609,10 +734,7 @@ async function handleAgentCommand(interaction) {
       if (PROJECTS_ROOT.startsWith('~')) {
         resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
       }
-      const targetPath = path.join(resolvedRoot, resolvedDirectory);
-      if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
-        resolvedDirectory = targetPath;
-      }
+      resolvedDirectory = path.join(resolvedRoot, resolvedDirectory);
     }
   }
 
@@ -671,6 +793,11 @@ async function handleAgentCommand(interaction) {
         );
 
       const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('project:new-session')
+          .setLabel('New Session')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🚀'),
         new ButtonBuilder()
           .setCustomId('project:readme')
           .setLabel('View README')
@@ -912,6 +1039,78 @@ async function handleStatusCommand(interaction) {
 * **Execution Mode:** \`${mode}\``;
 
   await interaction.editReply(statusCard);
+}
+
+/**
+ * COMMAND HANDLER: /rename
+ */
+async function handleRenameCommand(interaction) {
+  const threadId = interaction.channelId;
+  const newName = interaction.options.getString('name');
+  const channel = interaction.channel;
+
+  if (!channel || !channel.isThread()) {
+    return interaction.reply({
+      content: '❌ This command can only be used inside a thread.',
+      ephemeral: true
+    });
+  }
+
+  const meta = threadMetadata.get(threadId);
+  if (!meta) {
+    return interaction.reply({
+      content: '❌ No agent session metadata found for this thread.',
+      ephemeral: true
+    });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    // 1. Rename Discord Thread
+    await channel.setName(newName);
+
+    // 2. Update Metadata (if we want to store it)
+    meta.threadName = newName;
+    saveMetadata();
+
+    await interaction.editReply(`✅ **Thread renamed successfully to:** \`${newName}\``);
+  } catch (err) {
+    console.error('Rename failed:', err);
+    await interaction.editReply(`❌ **Failed to rename thread:** ${err.message}`);
+  }
+}
+
+/**
+ * COMMAND HANDLER: /delete
+ */
+async function handleDeleteCommand(interaction) {
+  const channel = interaction.channel;
+
+  if (!channel || !channel.isThread()) {
+    return interaction.reply({
+      content: '❌ This command can only be used inside a thread.',
+      ephemeral: true
+    });
+  }
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('thread:confirm-delete')
+      .setLabel('Confirm Delete')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🗑️'),
+    new ButtonBuilder()
+      .setCustomId('thread:cancel-delete')
+      .setLabel('Cancel')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  return interaction.reply({
+    content: '⚠️ **Are you sure you want to delete this thread?** This will archive the thread and remove its session metadata.',
+    components: [row],
+    ephemeral: true
+  });
 }
 
 /**
@@ -1345,6 +1544,11 @@ async function handleInfoCommand(interaction) {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
+      .setCustomId('project:new-session')
+      .setLabel('New Session')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🚀'),
+    new ButtonBuilder()
       .setCustomId('project:readme')
       .setLabel('View README')
       .setStyle(ButtonStyle.Secondary)
@@ -1405,16 +1609,40 @@ async function handleProjectButton(interaction) {
     });
   }
 
-  // Defer ephemeral reply
   try {
-    await interaction.deferReply({ ephemeral: true });
-  } catch (err) {
-    console.warn('Failed to defer reply for project button:', err.message);
-    return;
-  }
+    if (action === 'new-session') {
+      const modal = new ModalBuilder()
+        .setCustomId('session-modal')
+        .setTitle(`New Session: ${inferredProject}`);
 
-  try {
-    if (action === 'readme') {
+      const toolInput = new TextInputBuilder()
+        .setCustomId('tool')
+        .setLabel('Tool (gemini, agy, codex)')
+        .setPlaceholder('gemini')
+        .setRequired(true)
+        .setStyle(TextInputStyle.Short);
+
+      const promptInput = new TextInputBuilder()
+        .setCustomId('prompt')
+        .setLabel('Initial Task / Prompt')
+        .setPlaceholder('Enter your first prompt here...')
+        .setRequired(false)
+        .setStyle(TextInputStyle.Paragraph);
+
+      const row1 = new ActionRowBuilder().addComponents(toolInput);
+      const row2 = new ActionRowBuilder().addComponents(promptInput);
+
+      modal.addComponents(row1, row2);
+      return interaction.showModal(modal);
+
+    } else if (action === 'readme') {
+      // Defer ephemeral reply
+      try {
+        await interaction.deferReply({ ephemeral: true });
+      } catch (err) {
+        console.warn('Failed to defer reply for project button:', err.message);
+        return;
+      }
       const files = fs.readdirSync(resolvedDirectory);
       const readmeFile = files.find(f => {
         const lower = f.toLowerCase();

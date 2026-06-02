@@ -40,9 +40,14 @@ class ProcessManager extends EventEmitter {
       directory = path.join(os.homedir(), directory.substring(1));
     }
     
-    // 1. Validate directory
+    // 1. Validate/Create directory
     if (!fs.existsSync(directory)) {
-      throw new Error(`Directory "${directory}" does not exist.`);
+      try {
+        fs.mkdirSync(directory, { recursive: true });
+        console.log(`Created missing directory: ${directory}`);
+      } catch (err) {
+        throw new Error(`Failed to create directory "${directory}": ${err.message}`);
+      }
     }
     const stat = fs.statSync(directory);
     if (!stat.isDirectory()) {
