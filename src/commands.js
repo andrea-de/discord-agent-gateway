@@ -223,6 +223,10 @@ const commands = [
     .setDescription('Deletes the current thread and cleans up session metadata'),
 
   new SlashCommandBuilder()
+    .setName('sessions')
+    .setDescription('Lists all active and historical agent sessions for this gateway'),
+
+  new SlashCommandBuilder()
     .setName('export')
     .setDescription('Exports this thread session log to a markdown file in the project directory'),
 

@@ -159,6 +159,9 @@ client.once('ready', async () => {
         if (gatewayChannel) {
           await gatewayChannel.send(`🟢 **Agent Gateway [${currentGateway}] is online and ready to receive tasks.**\nAll commands run inside this category or channel will automatically target this instance.`);
           console.log(`Sent startup online message to #${channelName}.`);
+          
+          // Initialize Global Dashboard
+          await initDashboard(gatewayChannel);
         }
       }
     } catch (err) {
@@ -188,6 +191,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleStatusCommand(interaction);
   } else if (commandName === 'usage') {
     await handleUsageCommand(interaction);
+  } else if (commandName === 'sessions') {
+    await handleSessionsCommand(interaction);
   } else if (commandName === 'model') {
     await handleModelCommand(interaction);
   } else if (commandName === 'permission') {
@@ -366,8 +371,12 @@ client.on('interactionCreate', async (interaction) => {
     await handleProjectButton(interaction);
   } else if (customId.startsWith('thread:')) {
     await handleThreadButton(interaction);
+  } else if (customId.startsWith('dashboard:')) {
+    await handleDashboardButton(interaction);
+  } else if (customId.startsWith('session:')) {
+    await handleSessionButton(interaction);
   }
-  });
+});
 
   async function handleChoiceButton(interaction) {
   const customId = interaction.customId;
@@ -1383,6 +1392,179 @@ function recordUsage(tool, threadId, model, tokens) {
     fs.writeFileSync(USAGE_FILE, JSON.stringify(data, null, 2));
   } catch (e) {
     console.error('Failed to record usage:', e);
+  }
+}
+
+/**
+ * COMMAND HANDLER: /sessions
+ */
+async function handleSessionsCommand(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch (err) {
+    console.warn('Failed to defer reply for sessions command:', err.message);
+    return;
+  }
+  await updateSessionsList(interaction);
+}
+
+async function updateSessionsList(interactionOrMessage) {
+  const embed = new EmbedBuilder()
+    .setTitle(`📂 Agent Sessions History [${currentGateway}]`)
+    .setColor('#2b2d31')
+    .setDescription('Below is a list of your most recent agent sessions across all projects.')
+    .setTimestamp();
+
+  const metadataEntries = [...threadMetadata.entries()].reverse().slice(0, 10);
+  const rows = [];
+
+  if (metadataEntries.length === 0) {
+    embed.setDescription('No session history found.');
+  } else {
+    metadataEntries.forEach(([id, meta]) => {
+      const tool = (meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase();
+      const project = meta.directory.split('/').pop() || 'Unknown';
+      const status = processManager.activeTasks.has(id) ? '🟢 Running' : '⚪ Idle';
+      const name = meta.threadName || `Thread #${id}`;
+      
+      embed.addFields({
+        name: `${status} | ${tool} | ${project}`,
+        value: `**Name:** ${name}\n**Channel:** <#${id}>`
+      });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setLabel(`Jump to ${project}`)
+          .setStyle(ButtonStyle.Link)
+          .setURL(`https://discord.com/channels/${interactionOrMessage.guildId}/${id}`),
+        new ButtonBuilder()
+          .setCustomId(`session:delete:${id}`)
+          .setLabel('Delete')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('🗑️')
+      );
+      rows.push(row);
+    });
+  }
+
+  const response = { embeds: [embed], components: rows.slice(0, 5) }; // Limit to 5 rows for Discord
+  
+  try {
+    if (interactionOrMessage.editReply) {
+      await interactionOrMessage.editReply(response);
+    } else {
+      await interactionOrMessage.edit(response);
+    }
+  } catch (e) {
+    console.error('Failed to update sessions list UI:', e);
+  }
+}
+
+async function handleSessionButton(interaction) {
+  const parts = interaction.customId.split(':');
+  const action = parts[1];
+  const targetThreadId = parts[2];
+
+  if (action === 'delete') {
+    const meta = threadMetadata.get(targetThreadId);
+    if (!meta) {
+      return interaction.reply({ content: '❌ Session metadata not found.', ephemeral: true });
+    }
+
+    // Kill if active
+    if (processManager.activeTasks.has(targetThreadId)) {
+      await processManager.killTask(targetThreadId);
+    }
+
+    // Cleanup metadata
+    threadMetadata.delete(targetThreadId);
+    saveMetadata();
+
+    // Delete thread
+    try {
+      const thread = await interaction.guild.channels.fetch(targetThreadId);
+      if (thread) await thread.delete();
+    } catch (e) {}
+
+    await interaction.reply({ content: `✅ Session and thread for \`${targetThreadId}\` deleted.`, ephemeral: true });
+  }
+}
+
+let dashboardMessage = null;
+async function initDashboard(gatewayChannel) {
+  try {
+    // Try to find existing dashboard in the last 50 messages
+    const messages = await gatewayChannel.messages.fetch({ limit: 50 });
+    dashboardMessage = messages.find(m => m.author.id === client.user.id && m.embeds[0]?.title?.includes('Global Dashboard'));
+
+    if (!dashboardMessage) {
+      dashboardMessage = await gatewayChannel.send({ content: 'Initializing Global Dashboard...' });
+    }
+
+    setInterval(() => updateDashboard(), 10000);
+    updateDashboard();
+  } catch (e) {
+    console.error('Failed to initialize dashboard:', e);
+  }
+}
+
+async function updateDashboard() {
+  if (!dashboardMessage) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🛰️ Gateway Global Dashboard [${currentGateway}]`)
+    .setColor('#2b2d31')
+    .setTimestamp();
+
+  const activeTasks = [...processManager.activeTasks.values()];
+  
+  if (activeTasks.length === 0) {
+    embed.setDescription('✅ **All systems operational.** No active agent tasks running.');
+  } else {
+    let taskList = '';
+    activeTasks.forEach(task => {
+      const duration = processManager.formatDuration(Date.now() - task.startTime);
+      taskList += `🔸 **${(task.tool === 'agy' ? 'antigravity' : task.tool).toUpperCase()}** in <#${task.threadId}>\n`;
+      taskList += `   └ Status: \`${task.status}\` | Duration: \`${duration}\`\n\n`;
+    });
+    embed.setDescription(taskList);
+  }
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('dashboard:refresh')
+      .setLabel('Refresh')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔄'),
+    new ButtonBuilder()
+      .setCustomId('dashboard:sessions')
+      .setLabel('View Sessions')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('📂')
+  );
+
+  try {
+    await dashboardMessage.edit({ content: null, embeds: [embed], components: [row] });
+  } catch (e) {
+    console.error('Failed to update dashboard:', e);
+  }
+}
+
+async function handleDashboardButton(interaction) {
+  const action = interaction.customId.substring('dashboard:'.length);
+  if (action === 'refresh') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    await updateDashboard();
+  } else if (action === 'sessions') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      console.warn('Failed to defer reply for dashboard sessions button:', e.message);
+      return;
+    }
+    await updateSessionsList(interaction);
   }
 }
 
