@@ -378,11 +378,11 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-  async function handleChoiceButton(interaction) {
+async function handleChoiceButton(interaction) {
   const customId = interaction.customId;
   const value = customId.substring('choice:'.length);
   const threadId = interaction.channelId;
-  ...
+
   const task = processManager.activeTasks.get(threadId);
   if (!task) {
     return interaction.reply({
