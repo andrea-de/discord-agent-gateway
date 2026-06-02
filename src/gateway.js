@@ -421,7 +421,7 @@ async function handleChoiceButton(interaction) {
       ephemeral: true
     });
   }
-});
+}
 
 /**
  * Handle button clicks for thread-specific management (delete, confirm-delete)
@@ -461,18 +461,6 @@ async function handleThreadButton(interaction) {
     await interaction.update({ content: '✅ **Deletion cancelled.**', components: [] });
   }
 }
-
-/**
- * Handle button interaction for project dashboards
- */
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
-
-  const customId = interaction.customId;
-  if (!customId.startsWith('project:')) return;
-
-  await handleProjectButton(interaction);
-});
 
 /**
  * Handle message replies inside threads to redirect standard user replies to process stdin
