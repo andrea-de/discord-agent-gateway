@@ -87,8 +87,8 @@ class ProcessManager extends EventEmitter {
       env: spawnEnv
     });
 
-    // For agy and codex, stdin must be closed to prevent them from blocking/waiting on EOF
-    if (tool === 'agy' || tool === 'codex') {
+    // For agy, codex, and gemini, stdin must be closed to prevent them from blocking/waiting on EOF
+    if (tool === 'agy' || tool === 'codex' || tool === 'gemini') {
       child.stdin.end();
     }
 
@@ -232,10 +232,17 @@ Time: ${taskContext.startTime.toISOString()}
       remaining = nextContent;
     }
 
-    const authorName = task.tool === 'agy' ? 'Antigravity CLI' : 'Codex CLI';
-    const authorIcon = task.tool === 'agy' 
-      ? 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Google_Gemini_logo.svg/120px-Google_Gemini_logo.svg.png'
-      : 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/120px-OpenAI_Logo.svg.png';
+    let authorName = 'Agent CLI';
+    let authorIcon = 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Google_Gemini_logo.svg/120px-Google_Gemini_logo.svg.png';
+
+    if (task.tool === 'agy') {
+      authorName = 'Antigravity CLI';
+    } else if (task.tool === 'codex') {
+      authorName = 'Codex CLI';
+      authorIcon = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/OpenAI_Logo.svg/120px-OpenAI_Logo.svg.png';
+    } else if (task.tool === 'gemini') {
+      authorName = 'Gemini CLI';
+    }
 
     if (!task.sentMessages) {
       task.sentMessages = [];

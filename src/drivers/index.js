@@ -1,9 +1,11 @@
 const agyDriver = require('./agyDriver');
 const codexDriver = require('./codexDriver');
+const geminiDriver = require('./geminiDriver');
 
 const drivers = {
   agy: agyDriver,
-  codex: codexDriver
+  codex: codexDriver,
+  gemini: geminiDriver
 };
 
 function getDriver(tool) {

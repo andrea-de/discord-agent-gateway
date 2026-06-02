@@ -66,6 +66,50 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('gemini')
+    .setDescription('Initiates a Gemini CLI task in a new thread')
+    .addStringOption(option =>
+      option.setName('task')
+        .setDescription('Explain the task or prompt for the agent to execute')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('directory')
+        .setDescription('Absolute path or project folder name')
+        .setRequired(false)
+        .setAutocomplete(true)
+    )
+    .addStringOption(option =>
+      option.setName('gateway')
+        .setDescription('Target gateway location (e.g. HELSINKI, NUREMBERG)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'XPS', value: 'XPS' },
+          { name: 'Helsinki', value: 'HELSINKI' },
+          { name: 'Nuremberg', value: 'NUREMBERG' }
+        )
+    )
+    .addStringOption(option =>
+      option.setName('mode')
+        .setDescription('Execution mode (default: review)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Review Mode (default)', value: 'review' },
+          { name: 'YOLO Mode (auto-approve)', value: 'yolo' }
+        )
+    )
+    .addStringOption(option =>
+      option.setName('model')
+        .setDescription('Specify LLM model name (e.g. gemini-2.0-flash-exp)')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('flags')
+        .setDescription('Custom command-line flags')
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName('codex')
     .setDescription('Initiates a Codex task in a new thread')
     .addStringOption(option =>
@@ -146,18 +190,22 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
-    .setName('sandbox')
-    .setDescription('Gets or sets the sandbox policy for subsequent tasks in this thread')
+    .setName('permission')
+    .setDescription('Gets or sets the execution permission/sandbox policy for subsequent tasks in this thread')
     .addStringOption(option =>
       option.setName('policy')
-        .setDescription('Specify sandbox policy (e.g. workspace-write, danger-full-access, true, false)')
+        .setDescription('Specify permission policy or approval mode')
         .setRequired(false)
         .addChoices(
+          { name: 'Default (Prompt for all)', value: 'default' },
+          { name: 'Auto-Edit (Gemini: auto-approve edits)', value: 'auto_edit' },
+          { name: 'Plan (Gemini: read-only mode)', value: 'plan' },
+          { name: 'YOLO (Auto-approve everything)', value: 'yolo' },
           { name: 'Workspace Write (Codex)', value: 'workspace-write' },
           { name: 'Read Only (Codex)', value: 'read-only' },
           { name: 'Danger: Full Access (Codex)', value: 'danger-full-access' },
-          { name: 'True (Antigravity)', value: 'true' },
-          { name: 'False (Antigravity)', value: 'false' }
+          { name: 'True (Antigravity Sandbox)', value: 'true' },
+          { name: 'False (Antigravity Sandbox)', value: 'false' }
         )
     ),
 

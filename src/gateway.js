@@ -24,6 +24,20 @@ const client = new Client({
   ]
 });
 
+// Robustness: Handle client and process-level errors to prevent crashes
+client.on('error', (err) => {
+  console.error('[Discord Client Error]', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Unhandled Rejection] at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err);
+  // Optional: check if we should exit or try to recover
+});
+
 // Thread metadata session persistence map
 const METADATA_FILE = path.join(__dirname, '../.thread-metadata.json');
 let threadMetadata = new Map();
@@ -168,7 +182,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'antigravity' || commandName === 'codex') {
+  if (commandName === 'antigravity' || commandName === 'codex' || commandName === 'gemini') {
     await handleAgentCommand(interaction);
   } else if (commandName === 'status') {
     await handleStatusCommand(interaction);
@@ -176,8 +190,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleUsageCommand(interaction);
   } else if (commandName === 'model') {
     await handleModelCommand(interaction);
-  } else if (commandName === 'sandbox') {
-    await handleSandboxCommand(interaction);
+  } else if (commandName === 'permission') {
+    await handlePermissionCommand(interaction);
   } else if (commandName === 'export') {
     await handleExportCommand(interaction);
   } else if (commandName === 'kill') {
@@ -201,7 +215,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'antigravity' || commandName === 'codex') {
+  if (commandName === 'antigravity' || commandName === 'codex' || commandName === 'gemini') {
     const focusedOption = interaction.options.getFocused(true);
     if (focusedOption.name === 'directory') {
       const channel = interaction.channel;
@@ -511,7 +525,12 @@ async function handleAgentCommand(interaction) {
     ? (interaction.options.getBoolean('sandbox') ?? null)
     : (interaction.options.getString('sandbox') ?? null);
 
-  await interaction.deferReply({ ephemeral: true });
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch (err) {
+    console.warn(`Failed to defer reply for ${tool} command:`, err.message);
+    return;
+  }
 
   const guild = interaction.guild;
   if (!guild) {
@@ -775,7 +794,12 @@ async function handleStatusCommand(interaction) {
     });
   }
 
-  await interaction.deferReply();
+  try {
+    await interaction.deferReply();
+  } catch (err) {
+    console.warn('Failed to defer reply for status command:', err.message);
+    return;
+  }
 
   let tool = '';
   let status = '';
@@ -904,7 +928,12 @@ async function handleExportCommand(interaction) {
     });
   }
 
-  await interaction.deferReply();
+  try {
+    await interaction.deferReply();
+  } catch (err) {
+    console.warn('Failed to defer reply for export command:', err.message);
+    return;
+  }
 
   const exportPath = await processManager.exportTask(threadId);
   if (exportPath) {
@@ -1023,7 +1052,11 @@ async function performGitPullAndRestart(triggerSource) {
  * COMMAND HANDLER: /restart
  */
 async function handleRestartCommand(interaction) {
-  await interaction.deferReply({ ephemeral: true });
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch (err) {
+    console.warn('Failed to defer reply for restart command:', err.message);
+  }
   await performGitPullAndRestart(interaction);
 }
 
@@ -1077,9 +1110,9 @@ async function handleModelCommand(interaction) {
 }
 
 /**
- * COMMAND HANDLER: /sandbox
+ * COMMAND HANDLER: /permission
  */
-async function handleSandboxCommand(interaction) {
+async function handlePermissionCommand(interaction) {
   const threadId = interaction.channelId;
   let newPolicy = interaction.options.getString('policy');
   
@@ -1094,27 +1127,15 @@ async function handleSandboxCommand(interaction) {
   }
 
   const isAgy = meta.tool === 'agy';
+  const isGemini = meta.tool === 'gemini';
 
   if (newPolicy !== null && newPolicy !== undefined) {
-    // Convert string choices to boolean for agy, or leave as string for codex
+    // Validation for specific tools if needed, otherwise just store it
     if (isAgy) {
       if (newPolicy.toLowerCase() === 'true') {
         newPolicy = true;
       } else if (newPolicy.toLowerCase() === 'false') {
         newPolicy = false;
-      } else {
-        return interaction.reply({
-          content: '❌ **Invalid Policy:** Antigravity (`agy`) sandbox policy must be either `true` or `false`.',
-          ephemeral: true
-        });
-      }
-    } else {
-      const allowedPolicies = ['workspace-write', 'read-only', 'danger-full-access'];
-      if (!allowedPolicies.includes(newPolicy.toLowerCase())) {
-        return interaction.reply({
-          content: `❌ **Invalid Policy:** Codex sandbox policy must be one of: \`${allowedPolicies.join(', ')}\`.`,
-          ephemeral: true
-        });
       }
     }
 
@@ -1122,21 +1143,21 @@ async function handleSandboxCommand(interaction) {
     meta.sandbox = newPolicy;
     saveMetadata();
 
-    let response = `✅ **Sandbox policy updated successfully!**\n* **Thread Sandbox Policy:** \`${oldPolicy}\` ➔ \`${newPolicy}\`\nThis sandbox policy will be used for subsequent continuation runs in this thread.`;
+    let response = `✅ **Permission policy updated successfully!**\n* **Thread Permission Policy:** \`${oldPolicy}\` ➔ \`${newPolicy}\`\nThis policy will be used for subsequent continuation runs in this thread.`;
     
     if (task) {
       const activePolicy = task.sandbox !== undefined && task.sandbox !== null ? String(task.sandbox) : 'Default';
-      response += `\n\n⚠️ *Note: An active process is currently running with sandbox policy \`${activePolicy}\`. The new policy will take effect once the current task finishes and a new one is resumed.*`;
+      response += `\n\n⚠️ *Note: An active process is currently running with policy \`${activePolicy}\`. The new policy will take effect once the current task finishes and a new one is resumed.*`;
     }
 
     return interaction.reply(response);
   } else {
     const currentPolicy = meta.sandbox !== undefined && meta.sandbox !== null ? String(meta.sandbox) : 'Default';
-    let response = `🔒 **Current thread sandbox policy configuration:** \`${currentPolicy}\``;
+    let response = `🔒 **Current thread permission policy configuration:** \`${currentPolicy}\``;
     
     if (task) {
       const activePolicy = task.sandbox !== undefined && task.sandbox !== null ? String(task.sandbox) : 'Default';
-      response += `\n* **Active running process sandbox policy:** \`${activePolicy}\``;
+      response += `\n* **Active running process permission policy:** \`${activePolicy}\``;
     }
     
     return interaction.reply(response);
@@ -1168,14 +1189,19 @@ function recordUsage(tool, threadId, model, tokens) {
 
 // COMMAND HANDLER: /usage
 async function handleUsageCommand(interaction) {
-  await interaction.deferReply();
+  try {
+    await interaction.deferReply();
+  } catch (err) {
+    console.warn('Failed to defer reply for usage command:', err.message);
+    return;
+  }
 
   const threadId = interaction.channelId;
   const meta = threadMetadata.get(threadId);
 
   let threadTokens = 0;
   let globalTokens = 0;
-  let toolTotals = { agy: 0, codex: 0 };
+  let toolTotals = { agy: 0, codex: 0, gemini: 0 };
   let threadTotalsMap = new Map(); // threadId -> { tool, tokens }
   let threadModelTotals = new Map(); // modelName -> tokens
 
@@ -1186,11 +1212,17 @@ async function handleUsageCommand(interaction) {
         globalTokens += record.tokens;
         if (record.tool === 'agy') toolTotals.agy += record.tokens;
         if (record.tool === 'codex') toolTotals.codex += record.tokens;
+        if (record.tool === 'gemini') toolTotals.gemini += record.tokens;
 
         if (record.threadId) {
           if (record.threadId === threadId) {
             threadTokens += record.tokens;
-            const modelKey = record.model || (record.tool === 'agy' ? 'Gemini 3.5 Flash' : 'Default Codex Model');
+            let modelKey = record.model;
+            if (!modelKey) {
+              if (record.tool === 'agy') modelKey = 'Gemini 3.5 Flash';
+              else if (record.tool === 'gemini') modelKey = 'Gemini CLI Default';
+              else modelKey = 'Default Codex Model';
+            }
             const prevModelTokens = threadModelTotals.get(modelKey) || 0;
             threadModelTotals.set(modelKey, prevModelTokens + record.tokens);
           }
@@ -1219,6 +1251,7 @@ async function handleUsageCommand(interaction) {
     let overviewText = `### 📊 Global Token Usage Overview\n`;
     overviewText += `* **Total Tokens Consumed:** \`${globalTokens.toLocaleString()} tokens\`\n`;
     overviewText += `  * *Antigravity CLI (agy):* \`${toolTotals.agy.toLocaleString()} tokens\`\n`;
+    overviewText += `  * *Gemini CLI (gemini):* \`${toolTotals.gemini.toLocaleString()} tokens\`\n`;
     overviewText += `  * *Codex CLI (codex):* \`${toolTotals.codex.toLocaleString()} tokens\`\n\n`;
 
     overviewText += `**Active Sessions Usage Breakdown:**\n`;
@@ -1373,7 +1406,12 @@ async function handleProjectButton(interaction) {
   }
 
   // Defer ephemeral reply
-  await interaction.deferReply({ ephemeral: true });
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch (err) {
+    console.warn('Failed to defer reply for project button:', err.message);
+    return;
+  }
 
   try {
     if (action === 'readme') {
