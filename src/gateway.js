@@ -808,18 +808,23 @@ async function handleAgentCommand(interaction) {
           .setStyle(ButtonStyle.Primary)
           .setEmoji('🚀'),
         new ButtonBuilder()
+          .setCustomId('project:history')
+          .setLabel('History')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📂'),
+        new ButtonBuilder()
           .setCustomId('project:readme')
-          .setLabel('View README')
+          .setLabel('README')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('📖'),
         new ButtonBuilder()
           .setCustomId('project:files')
-          .setLabel('List Files')
+          .setLabel('Files')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('📁'),
         new ButtonBuilder()
           .setCustomId('project:git')
-          .setLabel('Git Status')
+          .setLabel('Git')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('🌿')
       );
@@ -1409,17 +1414,29 @@ async function handleSessionsCommand(interaction) {
 }
 
 async function updateSessionsList(interactionOrMessage) {
+  const { project: inferredProject } = resolveGatewayAndProject(interactionOrMessage.channel);
+  
   const embed = new EmbedBuilder()
-    .setTitle(`📂 Agent Sessions History [${currentGateway}]`)
+    .setTitle(inferredProject ? `📂 Sessions for Project: ${inferredProject}` : `📂 Global Agent Sessions History [${currentGateway}]`)
     .setColor('#2b2d31')
-    .setDescription('Below is a list of your most recent agent sessions across all projects.')
+    .setDescription(inferredProject ? `Showing most recent sessions for the **${inferredProject}** directory.` : 'Below is a list of your most recent agent sessions across all projects.')
     .setTimestamp();
 
-  const metadataEntries = [...threadMetadata.entries()].reverse().slice(0, 10);
+  // Filter entries if we are in a project channel
+  let metadataEntries = [...threadMetadata.entries()].reverse();
+  
+  if (inferredProject) {
+    metadataEntries = metadataEntries.filter(([id, meta]) => {
+      const projectDir = meta.directory.split('/').pop() || '';
+      return projectDir.toLowerCase() === inferredProject.toLowerCase();
+    });
+  }
+
+  metadataEntries = metadataEntries.slice(0, 10);
   const rows = [];
 
   if (metadataEntries.length === 0) {
-    embed.setDescription('No session history found.');
+    embed.setDescription(inferredProject ? `No session history found for project: **${inferredProject}**` : 'No session history found.');
   } else {
     metadataEntries.forEach(([id, meta]) => {
       const tool = (meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase();
@@ -1434,7 +1451,7 @@ async function updateSessionsList(interactionOrMessage) {
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setLabel(`Jump to ${project}`)
+          .setLabel(`Jump`)
           .setStyle(ButtonStyle.Link)
           .setURL(`https://discord.com/channels/${interactionOrMessage.guildId}/${id}`),
         new ButtonBuilder()
@@ -1731,18 +1748,23 @@ async function handleInfoCommand(interaction) {
       .setStyle(ButtonStyle.Primary)
       .setEmoji('🚀'),
     new ButtonBuilder()
+      .setCustomId('project:history')
+      .setLabel('History')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📂'),
+    new ButtonBuilder()
       .setCustomId('project:readme')
-      .setLabel('View README')
+      .setLabel('README')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📖'),
     new ButtonBuilder()
       .setCustomId('project:files')
-      .setLabel('List Files')
+      .setLabel('Files')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📁'),
     new ButtonBuilder()
       .setCustomId('project:git')
-      .setLabel('Git Status')
+      .setLabel('Git')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🌿')
   );
@@ -1816,6 +1838,10 @@ async function handleProjectButton(interaction) {
 
       modal.addComponents(row1, row2);
       return interaction.showModal(modal);
+
+    } else if (action === 'history') {
+      await interaction.deferReply({ ephemeral: true });
+      return updateSessionsList(interaction);
 
     } else if (action === 'readme') {
       // Defer ephemeral reply
