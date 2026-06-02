@@ -68,8 +68,17 @@ class ProcessManager extends EventEmitter {
     const args = driver.getArgs({ prompt, mode, isContinue, model, flags, directory, sandbox });
 
     // 3. Spawn process
+    const envPath = process.env.PATH || '';
+    const homeLocalBin = path.join(os.homedir(), '.local', 'bin');
+    const paths = envPath.split(path.delimiter);
+    if (!paths.includes(homeLocalBin)) {
+      paths.push(homeLocalBin);
+    }
+    const extendedPath = paths.join(path.delimiter);
+
     const spawnEnv = { 
       ...process.env,
+      PATH: extendedPath,
       ...driver.getEnv({ model })
     };
 
@@ -116,7 +125,7 @@ class ProcessManager extends EventEmitter {
     this.activeTasks.set(threadId, taskContext);
 
     // Initialize clean log file in the project
-    fs.writeFileSync(taskContext.fullLogFile, `--- SESSION STARTED FOR ${tool.toUpperCase()} ---
+    fs.writeFileSync(taskContext.fullLogFile, `--- SESSION STARTED FOR ${(tool === 'agy' ? 'antigravity' : tool).toUpperCase()} ---
 Directory: ${directory}
 Mode: ${mode}
 Prompt: ${prompt}
@@ -454,7 +463,7 @@ Time: ${taskContext.startTime.toISOString()}
       const sortedMessages = [...messages.values()].reverse();
 
       let markdownContent = `# Discord Chat-Ops Session Export
-* **Tool:** ${task.tool.toUpperCase()}
+* **Tool:** ${(task.tool === 'agy' ? 'antigravity' : task.tool).toUpperCase()}
 * **Directory:** \`${task.directory}\`
 * **Mode:** ${task.mode}
 * **Original Prompt:** ${task.prompt}

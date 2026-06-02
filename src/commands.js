@@ -167,7 +167,21 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('kill')
-    .setDescription('Forcefully terminates the active agent task and archives this thread')
+    .setDescription('Forcefully terminates the active agent task and archives this thread'),
+
+  new SlashCommandBuilder()
+    .setName('restart')
+    .setDescription('Pulls git updates and restarts the gateway server')
+    .addStringOption(option =>
+      option.setName('gateway')
+        .setDescription('Target gateway location (e.g. HELSINKI, NUREMBERG, XPS)')
+        .setRequired(false)
+        .addChoices(
+          { name: 'XPS', value: 'XPS' },
+          { name: 'Helsinki', value: 'HELSINKI' },
+          { name: 'Nuremberg', value: 'NUREMBERG' }
+        )
+    )
 ];
 
 /**

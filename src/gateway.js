@@ -184,6 +184,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleKillCommand(interaction);
   } else if (commandName === 'info') {
     await handleInfoCommand(interaction);
+  } else if (commandName === 'restart') {
+    await handleRestartCommand(interaction);
   }
 });
 
@@ -375,7 +377,8 @@ client.on('messageCreate', async (message) => {
         
         // Attempt to rename the thread to reflect the first prompt
         try {
-          const newName = `[${meta.tool}] ${content.substring(0, 75)}`.trim();
+          const toolDisplay = meta.tool === 'agy' ? 'antigravity' : meta.tool;
+          const newName = `[${toolDisplay}] ${content.substring(0, 75)}`.trim();
           await message.channel.setName(newName);
         } catch (renameErr) {
           console.warn('Failed to rename thread:', renameErr.message);
@@ -697,8 +700,9 @@ async function handleAgentCommand(interaction) {
     const sandboxDisplay = tool === 'codex'
       ? (sandbox || (mode === 'yolo' ? 'danger-full-access' : 'workspace-write'))
       : (sandbox !== undefined && sandbox !== null ? sandbox : 'Default');
+    const displayTool = tool === 'agy' ? 'antigravity' : tool;
     await thread.send(`### 🤖 ${hasPrompt ? 'Task' : 'Interactive Session'} Initiated
-* **Tool:** \`${tool.toUpperCase()}\`
+* **Tool:** \`${displayTool.toUpperCase()}\`
 * **Directory:** \`${resolvedDirectory}\`
 * **Mode:** \`${mode.toUpperCase()}\`
 * **Model:** \`${model || 'Default'}\`
@@ -788,7 +792,7 @@ async function handleStatusCommand(interaction) {
 
   if (task) {
     // Task is currently executing
-    tool = task.tool.toUpperCase();
+    tool = (task.tool === 'agy' ? 'antigravity' : task.tool).toUpperCase();
     status = `RUNNING (${task.status})`;
     elapsedStr = processManager.formatDuration(Date.now() - task.startTime);
     directory = task.directory;
@@ -824,7 +828,7 @@ async function handleStatusCommand(interaction) {
     }
   } else {
     // Task has completed, show last session details
-    tool = meta.tool.toUpperCase();
+    tool = (meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase();
     status = meta.hasStarted === false ? 'AWAITING FIRST PROMPT' : 'IDLE (Completed)';
     directory = meta.directory;
     mode = meta.mode.toUpperCase();
@@ -932,6 +936,95 @@ async function handleKillCommand(interaction) {
       ephemeral: true
     });
   }
+}
+
+/**
+ * Helper to execute git pull and then restart the gateway process.
+ */
+async function performGitPullAndRestart(triggerSource) {
+  let outputText = '';
+  try {
+    const { exec } = require('child_process');
+    outputText = await new Promise((resolve) => {
+      // Run git pull in the project root directory
+      exec('git pull', { cwd: path.join(__dirname, '..') }, (error, stdout, stderr) => {
+        let out = '';
+        if (error) {
+          out += `❌ **Git Pull Error:** ${error.message}\n`;
+        }
+        if (stdout && stdout.trim()) {
+          out += `stdout:\n\`\`\`\n${stdout.trim()}\n\`\`\`\n`;
+        }
+        if (stderr && stderr.trim()) {
+          out += `stderr:\n\`\`\`\n${stderr.trim()}\n\`\`\`\n`;
+        }
+        if (!out) {
+          out = 'Already up to date (no output).\n';
+        }
+        resolve(out);
+      });
+    });
+  } catch (err) {
+    outputText = `❌ Failed to perform git pull: ${err.message}\n`;
+  }
+
+  const statusMsg = `🔄 **Restarting Gateway [${currentGateway}]...**\n\n**Git Pull Output:**\n${outputText}`;
+  console.log(statusMsg.replace(/\*+/g, ''));
+
+  if (triggerSource && typeof triggerSource.editReply === 'function') {
+    try {
+      await triggerSource.editReply({ content: statusMsg });
+    } catch (e) {}
+  } else if (triggerSource && typeof triggerSource.send === 'function') {
+    try {
+      await triggerSource.send(statusMsg);
+    } catch (e) {}
+  } else {
+    // If triggered via keyboard shortcut in terminal, send status to the gateway text channel
+    try {
+      const channelName = currentGateway.toLowerCase();
+      const guild = client.guilds.cache.get(GUILD_ID);
+      if (guild) {
+        const gatewayChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
+        if (gatewayChannel) {
+          await gatewayChannel.send(statusMsg);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to notify Discord of keyboard restart:', e.message);
+    }
+  }
+
+  // Allow a short delay for Discord API messages to flush
+  setTimeout(() => {
+    const { spawn } = require('child_process');
+    const fs = require('fs');
+
+    let stdioOption = 'ignore';
+    try {
+      if (process.stdout.isTTY) {
+        const ttyFd = fs.openSync('/dev/tty', 'r+');
+        stdioOption = [ttyFd, ttyFd, ttyFd];
+      }
+    } catch (e) {
+      console.warn('Could not open /dev/tty for restart redirection, defaulting to ignore:', e.message);
+    }
+
+    const child = spawn(process.argv[0], process.argv.slice(1), {
+      detached: true,
+      stdio: stdioOption
+    });
+    child.unref();
+    process.exit(0);
+  }, 1000);
+}
+
+/**
+ * COMMAND HANDLER: /restart
+ */
+async function handleRestartCommand(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  await performGitPullAndRestart(interaction);
 }
 
 /**
@@ -1134,7 +1227,8 @@ async function handleUsageCommand(interaction) {
     } else {
       for (const [id, stats] of threadTotalsMap.entries()) {
         const threadMeta = threadMetadata.get(id);
-        const name = threadMeta ? `[${stats.tool.toUpperCase()}] ${threadMeta.directory.split('/').pop()}` : `Thread #${id}`;
+        const toolDisplay = stats.tool === 'agy' ? 'antigravity' : stats.tool;
+        const name = threadMeta ? `[${toolDisplay.toUpperCase()}] ${threadMeta.directory.split('/').pop()}` : `Thread #${id}`;
         overviewText += `* **Channel <#${id}> (${name}):** \`${stats.tokens.toLocaleString()} tokens\`\n`;
       }
     }
@@ -1439,3 +1533,23 @@ async function performSandboxDiagnostics() {
 
 // Bot token authorization login
 client.login(TOKEN);
+
+// Listen to keyboard press events on standard input for console shortcut 'r'
+if (process.stdin.isTTY) {
+  try {
+    const readline = require('readline');
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.on('keypress', async (str, key) => {
+      if (key.ctrl && key.name === 'c') {
+        process.exit();
+      } else if (key.name === 'r') {
+        console.log('\n🔄 Keyboard shortcut [r] detected! Triggering git pull and restart...');
+        await performGitPullAndRestart();
+      }
+    });
+    console.log('⌨️  Console keyboard listener active. Press [r] to git pull and restart, or [Ctrl+C] to exit.');
+  } catch (err) {
+    console.warn('Failed to initialize raw stdin console key listener:', err.message);
+  }
+}
