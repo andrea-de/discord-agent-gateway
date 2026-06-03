@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, MessageType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const processManager = require('./processManager');
@@ -170,6 +170,16 @@ client.on('interactionCreate', handleInteraction);
  * or to spawn continuation runs for completed tasks.
  */
 client.on('messageCreate', async (message) => {
+  // Automatically delete thread creation system notifications to keep parent channels clean
+  if (message.type === MessageType.ThreadCreated) {
+    try {
+      await message.delete();
+    } catch (e) {
+      console.warn('Failed to delete thread creation system message:', e.message);
+    }
+    return;
+  }
+
   // Ignore bots and webhooks
   if (message.author.bot || message.webhookId) return;
 
