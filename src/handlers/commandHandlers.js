@@ -672,7 +672,34 @@ async function handleUsageCommand(interaction) {
     const { getDriver } = require('../drivers');
     try {
       const driver = getDriver(meta.tool);
-      const usageCard = driver.getProviderUsageInfo(threadTokens, meta.model, threadModelTotals);
+      let usageCard = driver.getProviderUsageInfo(threadTokens, meta.model, threadModelTotals);
+      
+      // If it is Gemini or Antigravity, append the live quota details
+      if (meta.tool === 'gemini') {
+        const quotaService = require('../utils/quotaService');
+        const geminiToken = await quotaService.getGeminiToken();
+        const geminiProj = quotaService.getGeminiProjectId();
+        const geminiData = await quotaService.getQuotaDetails(geminiToken, geminiProj);
+        
+        usageCard += `\n\n### ♊ Live API Quotas (Project-based: \`${geminiProj}\`)\n`;
+        if (geminiToken && geminiData) {
+          usageCard += quotaService.formatQuotaMarkdown(geminiData, "Gemini", geminiProj);
+        } else {
+          usageCard += `*Credentials unavailable or failed to connect to Google API.*`;
+        }
+      } else if (meta.tool === 'agy') {
+        const quotaService = require('../utils/quotaService');
+        const agyToken = await quotaService.getAntigravityToken();
+        const agyData = await quotaService.getQuotaDetails(agyToken, "");
+        
+        usageCard += `\n\n### 🪐 Live API Quotas (Consumer-based)\n`;
+        if (agyToken && agyData) {
+          usageCard += quotaService.formatQuotaMarkdown(agyData, "Antigravity", "");
+        } else {
+          usageCard += `*Credentials unavailable or failed to connect to Google API.*`;
+        }
+      }
+
       return interaction.editReply(usageCard);
     } catch (err) {
       return interaction.editReply(`❌ **Failed to retrieve provider usage details:** ${err.message}`);
@@ -686,7 +713,7 @@ async function handleUsageCommand(interaction) {
 
     overviewText += `**Active Sessions Usage Breakdown:**\n`;
     if (threadTotalsMap.size === 0) {
-      overviewText += `* *No logged session usage found in registry.*`;
+      overviewText += `* *No logged session usage found in registry.*\n\n`;
     } else {
       for (const [id, stats] of threadTotalsMap.entries()) {
         const threadMeta = threadMetadata.get(id);
@@ -694,7 +721,17 @@ async function handleUsageCommand(interaction) {
         const name = threadMeta ? `[${toolDisplay.toUpperCase()}] ${threadMeta.directory.split('/').pop()}` : `Thread #${id}`;
         overviewText += `* **Channel <#${id}> (${name}):** \`${stats.tokens.toLocaleString()} tokens\`\n`;
       }
+      overviewText += `\n`;
     }
+
+    try {
+      const quotaService = require('../utils/quotaService');
+      const liveQuotaReport = await quotaService.getLiveQuotaReport();
+      overviewText += liveQuotaReport;
+    } catch (err) {
+      overviewText += `*Failed to query live Google API quotas: ${err.message}*`;
+    }
+
     overviewText += `\n*Tip: Run \`/usage\` inside a specific project thread to view detailed model quotas and rate limits.*`;
 
     return interaction.editReply(overviewText);
