@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const { ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { currentGateway } = require('../utils/state');
-const { KNOWN_GATEWAYS } = require('../utils/constants');
+const { KNOWN_GATEWAYS, CUSTOM_IDS } = require('../utils/constants');
 
 function resolveProjectDirectory(projectName) {
   const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
@@ -117,7 +117,26 @@ function resolveGatewayAndProject(channel) {
 }
 
 function isTargetForInteraction(interaction) {
-  // 1. Check explicitly chosen option "gateway" first
+  // 1. Explicit button target validation to prevent cross-gateway execution
+  if (interaction.isButton()) {
+    const customId = interaction.customId;
+    if (customId.startsWith('project:')) {
+      const parts = customId.split(':');
+      const gw = parts[1];
+      if (gw && KNOWN_GATEWAYS.includes(gw.toUpperCase())) {
+        return gw.toUpperCase() === currentGateway;
+      }
+    }
+    if (customId.startsWith('gateway:open-project:')) {
+      const parts = customId.substring('gateway:open-project:'.length).split(':');
+      const gw = parts[0];
+      if (gw && KNOWN_GATEWAYS.includes(gw.toUpperCase())) {
+        return gw.toUpperCase() === currentGateway;
+      }
+    }
+  }
+
+  // 2. Check explicitly chosen command option "gateway" first
   let chosenGateway = null;
   try {
     chosenGateway = interaction.options.getString('gateway');
@@ -126,7 +145,7 @@ function isTargetForInteraction(interaction) {
     }
   } catch (e) {}
 
-  // 2. Resolve gateway using resolveGatewayAndProject
+  // 3. Resolve gateway using resolveGatewayAndProject
   const { gateway: inferredGateway } = resolveGatewayAndProject(interaction.channel);
   if (inferredGateway) {
     return inferredGateway === currentGateway;
@@ -215,42 +234,60 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
 
       const embed = new EmbedBuilder()
         .setTitle(`📁 Project Dashboard: ${projectDirName}`)
-        .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively query project info ephemerally.`)
+        .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively start agent sessions or query project info.`)
         .setColor('#2b2d31')
         .addFields(
           { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
           { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
         );
 
-      const row = new ActionRowBuilder().addComponents(
+      const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('project:new-session')
-          .setLabel('New Session')
+          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
+          .setLabel('Antigravity')
           .setStyle(ButtonStyle.Primary)
-          .setEmoji('🚀'),
+          .setEmoji('🤖'),
         new ButtonBuilder()
-          .setCustomId('project:history')
+          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
+          .setLabel('Gemini')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('♊'),
+        new ButtonBuilder()
+          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
+          .setLabel('Codex')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🧠'),
+        new ButtonBuilder()
+          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
+          .setLabel('Terminal')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('📟')
+      );
+
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
           .setLabel('History')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('📂'),
         new ButtonBuilder()
-          .setCustomId('project:readme')
+          .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
           .setLabel('README')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('📖'),
         new ButtonBuilder()
-          .setCustomId('project:files')
+          .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
           .setLabel('Files')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('📁'),
         new ButtonBuilder()
-          .setCustomId('project:git')
+          .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
           .setLabel('Git')
           .setStyle(ButtonStyle.Secondary)
           .setEmoji('🌿')
       );
 
-      await projectChannel.send({ embeds: [embed], components: [row] });
+      await projectChannel.send({ embeds: [embed], components: [row1, row2] });
     }
     targetChannel = projectChannel;
   } catch (err) {

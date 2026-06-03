@@ -85,7 +85,14 @@ async function handleThreadButton(interaction) {
 }
 
 async function handleProjectButton(interaction) {
-  const action = interaction.customId.substring('project:'.length);
+  const customId = interaction.customId;
+  const parts = customId.split(':');
+  
+  // Custom ID format: project:${gateway}:${action}:${optionalTool}
+  const gateway = parts[1];
+  const action = parts[2];
+  const tool = parts[3];
+
   const channel = interaction.channel;
   if (!channel) {
     return interaction.reply({ content: '❌ Channel not found.', ephemeral: true });
@@ -122,30 +129,61 @@ async function handleProjectButton(interaction) {
   }
 
   try {
-    if (action === 'new-session') {
-      const modal = new ModalBuilder()
-        .setCustomId('session-modal')
-        .setTitle(`New Session: ${inferredProject}`);
+    if (action === 'start') {
+      if (tool === 'terminal') {
+        // Start Bash Terminal directly
+        await interaction.deferReply({ ephemeral: true });
+        try {
+          const threadName = `📟 [PTY] BASH in ${inferredProject}`;
+          const thread = await channel.threads.create({
+            name: threadName,
+            autoArchiveDuration: 1440,
+            reason: 'Interactive PTY Start from Dashboard'
+          });
 
-      const toolInput = new TextInputBuilder()
-        .setCustomId('tool')
-        .setLabel('Tool (gemini, agy, codex)')
-        .setPlaceholder('gemini')
-        .setRequired(true)
-        .setStyle(TextInputStyle.Short);
+          await thread.send(`### 📟 Persistent PTY Session Initiated
+* **Tool:** \`BASH\`
+* **Directory:** \`${resolvedDirectory}\`
+* **Type:** \`INTERACTIVE PTY\`
+---
+*Note: Any message sent in this thread will be piped directly to the terminal's stdin as keystrokes.*`);
 
-      const promptInput = new TextInputBuilder()
-        .setCustomId('prompt')
-        .setLabel('Initial Task / Prompt')
-        .setPlaceholder('Enter your first prompt here...')
-        .setRequired(false)
-        .setStyle(TextInputStyle.Paragraph);
+          await ptyManager.startSession({
+            thread,
+            tool: 'bash',
+            directory: resolvedDirectory
+          });
 
-      const row1 = new ActionRowBuilder().addComponents(toolInput);
-      const row2 = new ActionRowBuilder().addComponents(promptInput);
+          threadMetadata.set(thread.id, { 
+            tool: 'bash', 
+            directory: resolvedDirectory, 
+            isPty: true,
+            hasStarted: true 
+          });
+          saveMetadata();
 
-      modal.addComponents(row1, row2);
-      return interaction.showModal(modal);
+          await interaction.editReply({ content: `✅ Terminal session started in <#${thread.id}>` });
+        } catch (err) {
+          console.error('PTY task start failed:', err);
+          await interaction.editReply({ content: `❌ Failed to start terminal: ${err.message}` });
+        }
+      } else {
+        // Open Modal to enter Prompt for the specific tool
+        const modal = new ModalBuilder()
+          .setCustomId(`session-modal:${gateway}:${tool}`)
+          .setTitle(`New Session: ${tool === 'antigravity' ? 'Antigravity' : tool.toUpperCase()} - ${inferredProject}`);
+
+        const promptInput = new TextInputBuilder()
+          .setCustomId('prompt')
+          .setLabel('Initial Task / Prompt')
+          .setPlaceholder('Enter your first prompt here...')
+          .setRequired(false)
+          .setStyle(TextInputStyle.Paragraph);
+
+        const row = new ActionRowBuilder().addComponents(promptInput);
+        modal.addComponents(row);
+        return interaction.showModal(modal);
+      }
 
     } else if (action === 'history') {
       await interaction.deferReply({ ephemeral: true });

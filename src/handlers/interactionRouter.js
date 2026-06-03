@@ -66,7 +66,7 @@ async function handleInteraction(interaction) {
 
   // 3. Modal Submissions
   else if (interaction.isModalSubmit()) {
-    if (interaction.customId === 'session-modal') {
+    if (interaction.customId.startsWith('session-modal:')) {
       await modalHandlers.handleSessionModal(interaction);
     }
   }

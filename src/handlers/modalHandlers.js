@@ -5,8 +5,8 @@ const { threadMetadata, saveMetadata } = require('../utils/state');
 const { resolveGatewayAndProject } = require('../services/projectService');
 
 async function handleSessionModal(interaction) {
-  const toolRaw = interaction.fields.getTextInputValue('tool').toLowerCase().trim();
-  const tool = toolRaw === 'antigravity' ? 'agy' : toolRaw;
+  const parts = interaction.customId.split(':');
+  const tool = parts[2] || 'gemini';
   const prompt = interaction.fields.getTextInputValue('prompt').trim();
   
   const { project: inferredProject } = resolveGatewayAndProject(interaction.channel);
@@ -33,7 +33,8 @@ async function handleSessionModal(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const threadName = prompt ? `[${tool}] ${prompt.substring(0, 75)}` : `[${tool}] Interactive Session`;
+    const displayToolName = tool === 'agy' ? 'antigravity' : tool;
+    const threadName = prompt ? `[${displayToolName}] ${prompt.substring(0, 75)}` : `[${displayToolName}] Interactive Session`;
     const thread = await interaction.channel.threads.create({
       name: threadName,
       autoArchiveDuration: 1440,

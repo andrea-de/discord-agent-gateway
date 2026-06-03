@@ -5,11 +5,11 @@ const CUSTOM_IDS = {
     OPEN_PROJECT: (gateway, project) => `gateway:open-project:${gateway}:${project}`
   },
   PROJECT: {
-    NEW_SESSION: 'project:new-session',
-    HISTORY: 'project:history',
-    README: 'project:readme',
-    FILES: 'project:files',
-    GIT: 'project:git',
+    START_TOOL: (gateway, tool) => `project:${gateway}:start:${tool}`,
+    HISTORY: (gateway) => `project:${gateway}:history`,
+    README: (gateway) => `project:${gateway}:readme`,
+    FILES: (gateway) => `project:${gateway}:files`,
+    GIT: (gateway) => `project:${gateway}:git`,
   },
   THREAD: {
     CONFIRM_DELETE: 'thread:confirm-delete',
