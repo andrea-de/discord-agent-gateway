@@ -215,9 +215,9 @@ function isTargetForInteraction(interaction) {
     return false;
   }
 
-  // Default: If run in general and no option is specified, let XPS act as default responder to explain
+  // Default: If run in general and no option is specified, let HELSINKI act as default responder to explain
   if (!chosenGateway && !channelGateway) {
-    return currentGateway === 'XPS';
+    return currentGateway === 'HELSINKI';
   }
 
   return false;
