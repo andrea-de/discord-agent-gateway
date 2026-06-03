@@ -7,6 +7,8 @@ const { currentGateway, threadMetadata, saveMetadata } = require('../utils/state
 const { resolveGatewayAndProject, resolveProjectDirectory, getOrCreateProjectChannel } = require('../services/projectService');
 const { performGitPullAndRestart } = require('../services/restartService');
 const { updateSessionsList } = require('../services/statusUiService');
+const { CUSTOM_IDS } = require('../utils/constants');
+
 
 const CLIENT_ID = process.env.CLIENT_ID;
 
@@ -742,35 +744,53 @@ async function handleInfoCommand(interaction) {
       { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
     );
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('project:new-session')
-      .setLabel('New Session')
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
+      .setLabel('Antigravity')
       .setStyle(ButtonStyle.Primary)
-      .setEmoji('🚀'),
+      .setEmoji('🤖'),
     new ButtonBuilder()
-      .setCustomId('project:history')
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
+      .setLabel('Gemini')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('♊'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
+      .setLabel('Codex')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🧠'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
+      .setLabel('Terminal')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('📟')
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
       .setLabel('History')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📂'),
     new ButtonBuilder()
-      .setCustomId('project:readme')
+      .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
       .setLabel('README')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📖'),
     new ButtonBuilder()
-      .setCustomId('project:files')
+      .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
       .setLabel('Files')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📁'),
     new ButtonBuilder()
-      .setCustomId('project:git')
+      .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
       .setLabel('Git')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🌿')
   );
 
-  return interaction.reply({ embeds: [embed], components: [row] });
+  return interaction.reply({ embeds: [embed], components: [row1, row2] });
 }
 
 module.exports = {
