@@ -396,6 +396,109 @@ async function sendProjectDashboard(channel, resolvedDirectory) {
   return channel.send({ embeds: [embed], components: [row1, row2] });
 }
 
+async function updateAllProjectDashboards(guild) {
+  try {
+    const categoryName = `${currentGateway} GATEWAY`;
+    const channels = await guild.channels.fetch();
+    const category = channels.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
+    if (!category) return;
+
+    const projectChannels = channels.filter(c => c.parentId === category.id && c.type === ChannelType.GuildText);
+
+    for (const [id, channel] of projectChannels) {
+      try {
+        const messages = await channel.messages.fetch({ limit: 20 });
+        const client = channel.client;
+        const dashboardMsg = messages.find(m => 
+          m.author.id === client.user.id && 
+          m.embeds[0] && 
+          m.embeds[0].title && 
+          m.embeds[0].title.startsWith('📁 Project Dashboard:')
+        );
+
+        if (dashboardMsg) {
+          // Fetch active threads in the channel
+          let threadsValue = '*No active sessions.*';
+          try {
+            const fetched = await channel.threads.fetchActive();
+            const threads = Array.from(fetched.threads.values());
+            if (threads.length > 0) {
+              threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
+            }
+          } catch (e) {}
+
+          const oldEmbed = dashboardMsg.embeds[0];
+          const newEmbed = EmbedBuilder.from(oldEmbed);
+
+          // Update active threads field
+          const fields = oldEmbed.fields.filter(f => f.name !== 'Active Sessions');
+          newEmbed.setFields(fields);
+          newEmbed.addFields({ name: 'Active Sessions', value: threadsValue });
+
+          // Update components to Row 1 and Row 2 with Clean button
+          const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
+              .setLabel('Antigravity')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('🤖'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
+              .setLabel('Gemini')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('♊'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
+              .setLabel('Codex')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('🧠'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
+              .setLabel('Terminal')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('📟')
+          );
+
+          const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
+              .setLabel('History')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('📂'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
+              .setLabel('README')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('📖'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
+              .setLabel('Files')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('📁'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
+              .setLabel('Git')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('🌿'),
+            new ButtonBuilder()
+              .setCustomId(CUSTOM_IDS.PROJECT.CLEAN(currentGateway))
+              .setLabel('Clean')
+              .setStyle(ButtonStyle.Danger)
+              .setEmoji('🧹')
+          );
+
+          await dashboardMsg.edit({ embeds: [newEmbed], components: [row1, row2] });
+        }
+      } catch (err) {
+        console.warn(`Failed to update dashboard for channel ${channel.name}:`, err.message);
+      }
+    }
+    console.log(`[Project Service] Successfully refreshed dashboards for category: ${categoryName}`);
+  } catch (err) {
+    console.error('Failed to update all project dashboards on startup:', err);
+  }
+}
+
 module.exports = {
   resolveProjectDirectory,
   listProjectDirectories,
@@ -404,4 +507,5 @@ module.exports = {
   getOrCreateProjectChannel,
   updateProjectDashboard,
   sendProjectDashboard,
+  updateAllProjectDashboards,
 };

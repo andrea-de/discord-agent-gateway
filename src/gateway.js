@@ -15,7 +15,7 @@ const {
   recordUsage
 } = require('./utils/state');
 
-const { resolveGatewayAndProject, updateProjectDashboard } = require('./services/projectService');
+const { resolveGatewayAndProject, updateProjectDashboard, updateAllProjectDashboards } = require('./services/projectService');
 const { initGatewayMessages, initSessionsPeriodicRefresh } = require('./services/statusUiService');
 const { performGitPullAndRestart } = require('./services/restartService');
 const { handleInteraction } = require('./handlers/interactionRouter');
@@ -152,6 +152,9 @@ client.once('ready', async () => {
           await initGatewayMessages(gatewayChannel);
           await initSessionsPeriodicRefresh(gatewayChannel);
         }
+
+        // 4. Refresh all project dashboards in the category on boot
+        await updateAllProjectDashboards(guild);
       }
     } catch (err) {
       console.warn('Startup category/channel auto-provisioning failed:', err.message);
