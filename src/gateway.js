@@ -15,7 +15,7 @@ const {
   recordUsage
 } = require('./utils/state');
 
-const { resolveGatewayAndProject } = require('./services/projectService');
+const { resolveGatewayAndProject, updateProjectDashboard } = require('./services/projectService');
 const { initGatewayMessages, initSessionsPeriodicRefresh } = require('./services/statusUiService');
 const { performGitPullAndRestart } = require('./services/restartService');
 const { handleInteraction } = require('./handlers/interactionRouter');
@@ -273,12 +273,40 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Clean up metadata when a thread is deleted
+// Helper to handle thread lifecycle updates on the project dashboard
+async function handleThreadChange(thread) {
+  const parent = thread.parent;
+  if (!parent) return;
+
+  // Verify parent channel is a project channel under a Gateway Category
+  const parentCategory = parent.parent;
+  if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
+    const { gateway } = resolveGatewayAndProject(parent);
+    if (gateway && gateway === currentGateway) {
+      await updateProjectDashboard(parent);
+    }
+  }
+}
+
+// Update dashboard list when a thread is created
+client.on('threadCreate', async (thread) => {
+  await handleThreadChange(thread);
+});
+
+// Clean up metadata and update dashboard when a thread is deleted
 client.on('threadDelete', async (thread) => {
   if (threadMetadata.has(thread.id)) {
     console.log(`[Thread Delete] Cleaning up session metadata for thread ${thread.id}`);
     threadMetadata.delete(thread.id);
     saveMetadata();
+  }
+  await handleThreadChange(thread);
+});
+
+// Update dashboard list when a thread is archived or unarchived
+client.on('threadUpdate', async (oldThread, newThread) => {
+  if (oldThread.archived !== newThread.archived) {
+    await handleThreadChange(newThread);
   }
 });
 

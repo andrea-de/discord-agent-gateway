@@ -272,7 +272,8 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
         .setColor('#2b2d31')
         .addFields(
           { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
-          { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
+          { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true },
+          { name: 'Active Sessions', value: '*No active sessions.*' }
         );
 
       const row1 = new ActionRowBuilder().addComponents(
@@ -334,10 +335,49 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
   return { targetChannel, permissionWarning };
 }
 
+async function updateProjectDashboard(channel) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 20 });
+    const client = channel.client;
+    const dashboardMsg = messages.find(m => 
+      m.author.id === client.user.id && 
+      m.embeds[0] && 
+      m.embeds[0].title && 
+      m.embeds[0].title.startsWith('📁 Project Dashboard:')
+    );
+
+    if (!dashboardMsg) return;
+
+    // Fetch active threads in the channel
+    const fetched = await channel.threads.fetchActive();
+    const threads = Array.from(fetched.threads.values());
+
+    // Generate active threads section
+    let threadsValue = '*No active sessions.*';
+    if (threads.length > 0) {
+      threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
+    }
+
+    // Clone the existing embed to avoid mutating read-only structures
+    const oldEmbed = dashboardMsg.embeds[0];
+    const newEmbed = EmbedBuilder.from(oldEmbed);
+
+    // Update the "Active Sessions" field or add it
+    const fields = oldEmbed.fields.filter(f => f.name !== 'Active Sessions');
+    newEmbed.setFields(fields);
+    newEmbed.addFields({ name: 'Active Sessions', value: threadsValue });
+
+    await dashboardMsg.edit({ embeds: [newEmbed] });
+  } catch (e) {
+    console.error('Failed to update project dashboard:', e);
+  }
+}
+
 module.exports = {
   resolveProjectDirectory,
   listProjectDirectories,
   resolveGatewayAndProject,
   isTargetForInteraction,
   getOrCreateProjectChannel,
+  updateProjectDashboard,
 };
