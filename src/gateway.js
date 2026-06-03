@@ -298,9 +298,33 @@ client.on('threadCreate', async (thread) => {
 
 // Clean up metadata and update dashboard when a thread is deleted
 client.on('threadDelete', async (thread) => {
-  if (threadMetadata.has(thread.id)) {
-    console.log(`[Thread Delete] Cleaning up session metadata for thread ${thread.id}`);
-    threadMetadata.delete(thread.id);
+  const threadId = thread.id;
+
+  // Kill active agent task if any
+  const task = processManager.activeTasks.get(threadId);
+  if (task) {
+    try {
+      console.log(`[Thread Delete] Killing active task for deleted thread ${threadId}`);
+      await processManager.killTask(threadId);
+    } catch (e) {
+      console.error(`Failed to kill task on thread deletion:`, e);
+    }
+  }
+
+  // Kill active PTY session if any
+  const ptySession = ptyManager.activeSessions.get(threadId);
+  if (ptySession) {
+    try {
+      console.log(`[Thread Delete] Killing active PTY session for deleted thread ${threadId}`);
+      await ptyManager.killSession(threadId);
+    } catch (e) {
+      console.error(`Failed to kill PTY session on thread deletion:`, e);
+    }
+  }
+
+  if (threadMetadata.has(threadId)) {
+    console.log(`[Thread Delete] Cleaning up session metadata for thread ${threadId}`);
+    threadMetadata.delete(threadId);
     saveMetadata();
   }
   await handleThreadChange(thread);
