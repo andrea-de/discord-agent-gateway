@@ -158,11 +158,10 @@ client.once('ready', async () => {
         
         // 3. Post online message
         if (gatewayChannel) {
-          await gatewayChannel.send(`🟢 **Agent Gateway [${currentGateway}] is online and ready to receive tasks.**\nAll commands run inside this category or channel will automatically target this instance.`);
-          console.log(`Sent startup online message to #${channelName}.`);
+          await initGatewayMessages(gatewayChannel);
           
-          // Initialize Global Dashboard
-          await initDashboard(gatewayChannel);
+          // Start sessions periodic refresh and cleanup old dashboard
+          await initSessionsPeriodicRefresh(gatewayChannel);
         }
       }
     } catch (err) {
@@ -220,6 +219,8 @@ client.on('interactionCreate', async (interaction) => {
  */
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isModalSubmit()) return;
+
+  if (!isTargetForInteraction(interaction)) return;
 
   if (interaction.customId === 'session-modal') {
     await handleSessionModal(interaction);
@@ -367,6 +368,8 @@ client.on('interactionCreate', async (interaction) => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
+  if (!isTargetForInteraction(interaction)) return;
+
   const customId = interaction.customId;
   if (customId.startsWith('choice:')) {
     await handleChoiceButton(interaction);
@@ -378,6 +381,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleDashboardButton(interaction);
   } else if (customId.startsWith('session:')) {
     await handleSessionButton(interaction);
+  } else if (customId.startsWith('gateway:')) {
+    await handleGatewayButton(interaction);
   }
 });
 
@@ -567,6 +572,67 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+function resolveProjectDirectory(projectName) {
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  if (!PROJECTS_ROOT || !projectName) return null;
+  const cleanProjectName = projectName.trim();
+
+  const os = require('os');
+  let resolvedRoot = PROJECTS_ROOT;
+  if (PROJECTS_ROOT.startsWith('~')) {
+    resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+  }
+
+  const targetPath = path.join(resolvedRoot, cleanProjectName);
+  if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+    return targetPath;
+  }
+
+  if (fs.existsSync(resolvedRoot) && fs.statSync(resolvedRoot).isDirectory()) {
+    const match = fs.readdirSync(resolvedRoot)
+      .find(item => item.toLowerCase() === cleanProjectName.toLowerCase());
+    if (match) {
+      const matchedPath = path.join(resolvedRoot, match);
+      if (fs.statSync(matchedPath).isDirectory()) {
+        return matchedPath;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getResolvedProjectsRoot() {
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  if (!PROJECTS_ROOT) return null;
+
+  const os = require('os');
+  if (PROJECTS_ROOT.startsWith('~')) {
+    return path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+  }
+  return PROJECTS_ROOT;
+}
+
+function listProjectDirectories() {
+  const resolvedRoot = getResolvedProjectsRoot();
+  if (!resolvedRoot) return [];
+
+  const fs = require('fs');
+  try {
+    return fs.readdirSync(resolvedRoot).filter(item => {
+      const fullPath = path.join(resolvedRoot, item);
+      try {
+        return fs.statSync(fullPath).isDirectory() && !item.startsWith('.');
+      } catch (e) {
+        return false;
+      }
+    });
+  } catch (e) {
+    console.error('Failed to list project directories:', e);
+    return [];
+  }
+}
+
 const currentGateway = (process.env.GATEWAY_NAME || 'HELSINKI').toUpperCase();
 
 function resolveGatewayAndProject(channel) {
@@ -692,14 +758,18 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
   let permissionWarning = null;
 
   try {
+    // Fetch channels to prevent cache misses
+    const channels = await guild.channels.fetch();
+
     // 1. Find or create the Gateway category
-    let category = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
+    let category = channels.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
     if (!category) {
       try {
         category = await guild.channels.create({
           name: categoryName,
           type: ChannelType.GuildCategory
         });
+        channels.set(category.id, category);
       } catch (catErr) {
         console.warn(`Could not create category "${categoryName}":`, catErr.message);
         if (catErr.code === 50013 || catErr.status === 403) {
@@ -709,7 +779,7 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
     }
 
     // 2. Find or create the project-specific text channel
-    let projectChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
+    let projectChannel = channels.find(c => c.name === channelName && c.type === ChannelType.GuildText);
     if (!projectChannel) {
       const channelOpts = {
         name: channelName,
@@ -1641,6 +1711,177 @@ async function handleDashboardButton(interaction) {
       return;
     }
     await updateSessionsList(interaction);
+  }
+}
+
+let onlineMessage = null;
+let infoMessage = null;
+let sessionsMessage = null;
+
+async function initGatewayMessages(gatewayChannel) {
+  try {
+    const messages = await gatewayChannel.messages.fetch({ limit: 50 });
+
+    onlineMessage = messages.find(m => 
+      m.author.id === client.user.id && 
+      (m.content && m.content.includes('is online and ready to receive tasks'))
+    );
+
+    infoMessage = messages.find(m => 
+      m.author.id === client.user.id && 
+      (m.embeds[0]?.title?.includes('Gateway Info') || m.embeds[0]?.title?.includes('Gateway Projects') || (m.content && m.content.includes('Initializing Gateway Info')))
+    );
+
+    sessionsMessage = messages.find(m => 
+      m.author.id === client.user.id && 
+      (m.embeds[0]?.title?.includes('Global Agent Sessions History') || m.embeds[0]?.title?.includes('Sessions History') || (m.content && m.content.includes('Initializing Sessions History')))
+    );
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('gateway:info')
+        .setLabel('Info')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🛰️'),
+      new ButtonBuilder()
+        .setCustomId('gateway:sessions')
+        .setLabel('Sessions')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('📂')
+    );
+
+    const onlineContent = `🟢 **Agent Gateway [${currentGateway}] is online and ready to receive tasks.**\nAll commands run inside this category or channel will automatically target this instance.\n*(Last Start: <t:${Math.floor(Date.now() / 1000)}:F>)*`;
+
+    if (onlineMessage) {
+      await onlineMessage.edit({ content: onlineContent, components: [row] });
+      console.log('Reused and updated existing startup online message.');
+    } else {
+      onlineMessage = await gatewayChannel.send({ content: onlineContent, components: [row] });
+      console.log('Sent new startup online message.');
+    }
+
+    if (!infoMessage) {
+      infoMessage = await gatewayChannel.send({ content: 'Initializing Gateway Info...' });
+    }
+    await updateGatewayInfoMessage();
+
+    if (!sessionsMessage) {
+      sessionsMessage = await gatewayChannel.send({ content: 'Initializing Sessions History...' });
+    }
+    await updateSessionsList(sessionsMessage);
+
+  } catch (err) {
+    console.error('Failed to initialize gateway messages:', err);
+  }
+}
+
+async function updateGatewayInfoMessage() {
+  if (!infoMessage) return;
+
+  const projects = listProjectDirectories();
+  const visibleProjects = projects.slice(0, 25);
+  const projectList = visibleProjects.length
+    ? visibleProjects.map(name => `• ${name}`).join('\n')
+    : 'No project directories found.';
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📁 Gateway Projects: ${currentGateway}`)
+    .setColor('#2b2d31')
+    .setDescription(projectList)
+    .addFields(
+      { name: 'Projects Root', value: `\`${process.env.PROJECTS_ROOT || 'Not configured'}\`` }
+    );
+
+  if (projects.length > visibleProjects.length) {
+    embed.setFooter({ text: `Showing ${visibleProjects.length} of ${projects.length} projects.` });
+  }
+
+  // Create buttons for project folder channels
+  const rows = [];
+  let currentRow = new ActionRowBuilder();
+
+  visibleProjects.forEach((projectName, index) => {
+    if (index > 0 && index % 5 === 0) {
+      rows.push(currentRow);
+      currentRow = new ActionRowBuilder();
+    }
+    currentRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`gateway:open-project:${currentGateway}:${projectName}`)
+        .setLabel(projectName)
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('📁')
+    );
+  });
+
+  if (currentRow.components.length > 0) {
+    rows.push(currentRow);
+  }
+
+  try {
+    await infoMessage.edit({ content: null, embeds: [embed], components: rows });
+  } catch (err) {
+    console.error('Failed to update projects message:', err);
+  }
+}
+
+async function handleGatewayButton(interaction) {
+  const action = interaction.customId.substring('gateway:'.length);
+  if (action === 'info') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    await updateGatewayInfoMessage();
+  } else if (action === 'sessions') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    if (sessionsMessage) {
+      await updateSessionsList(sessionsMessage);
+    }
+  } else if (action.startsWith('open-project:')) {
+    const parts = action.substring('open-project:'.length).split(':');
+    const targetGateway = parts[0];
+    const projectName = parts[1];
+
+    if (targetGateway !== currentGateway) {
+      return; // Ignore if not meant for us
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      console.warn('Failed to defer reply for open project:', e.message);
+      return;
+    }
+    const resolvedDir = resolveProjectDirectory(projectName);
+    if (!resolvedDir) {
+      return interaction.editReply({ content: `❌ Could not resolve directory for project: \`${projectName}\`` });
+    }
+    const guild = interaction.guild;
+    const { targetChannel } = await getOrCreateProjectChannel(guild, resolvedDir);
+    await interaction.editReply({ content: `📁 Project channel opened: <#${targetChannel.id}>` });
+  }
+}
+
+async function initSessionsPeriodicRefresh(gatewayChannel) {
+  try {
+    // Try to find existing dashboard in the last 50 messages and delete it if found
+    const messages = await gatewayChannel.messages.fetch({ limit: 50 });
+    const oldDash = messages.find(m => m.author.id === client.user.id && m.embeds[0]?.title?.includes('Global Dashboard'));
+    if (oldDash) {
+      await oldDash.delete().catch(() => {});
+      console.log('Deleted old Global Dashboard message.');
+    }
+
+    // Periodically update sessions list
+    setInterval(() => {
+      if (sessionsMessage) {
+        updateSessionsList(sessionsMessage).catch(console.error);
+      }
+    }, 10000);
+  } catch (e) {
+    console.error('Failed to initialize sessions periodic refresh:', e);
   }
 }
 
