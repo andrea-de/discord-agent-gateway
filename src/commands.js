@@ -223,6 +223,21 @@ const commands = [
     .setDescription('Deletes the current thread and cleans up session metadata'),
 
   new SlashCommandBuilder()
+    .setName('terminal')
+    .setDescription('Starts a persistent interactive PTY terminal session')
+    .addStringOption(option =>
+      option.setName('tool')
+        .setDescription('Tool to run in the terminal (gemini, bash, agy, codex)')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('directory')
+        .setDescription('Working directory for the terminal')
+        .setRequired(false)
+        .setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
     .setName('sessions')
     .setDescription('Lists all active and historical agent sessions for this gateway'),
 

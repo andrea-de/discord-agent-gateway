@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, ChannelType, ActionRowBuilder, ButtonBuilder,
 const fs = require('fs');
 const path = require('path');
 const processManager = require('./processManager');
+const ptyManager = require('./ptyManager');
 const { registerCommands } = require('./commands');
 
 // Ensure token configuration is present
@@ -191,6 +192,8 @@ client.on('interactionCreate', async (interaction) => {
     await handleStatusCommand(interaction);
   } else if (commandName === 'usage') {
     await handleUsageCommand(interaction);
+  } else if (commandName === 'terminal') {
+    await handleTerminalCommand(interaction);
   } else if (commandName === 'sessions') {
     await handleSessionsCommand(interaction);
   } else if (commandName === 'model') {
@@ -300,7 +303,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName } = interaction;
 
-  if (commandName === 'antigravity' || commandName === 'codex' || commandName === 'gemini') {
+  if (commandName === 'antigravity' || commandName === 'codex' || commandName === 'gemini' || commandName === 'terminal') {
     const focusedOption = interaction.options.getFocused(true);
     if (focusedOption.name === 'directory') {
       const channel = interaction.channel;
@@ -443,6 +446,10 @@ async function handleThreadButton(interaction) {
     if (task) {
       await processManager.killTask(threadId);
     }
+    const ptySession = ptyManager.activeSessions.get(threadId);
+    if (ptySession) {
+      await ptyManager.killSession(threadId);
+    }
 
     // 3. Cleanup Metadata
     if (threadMetadata.has(threadId)) {
@@ -480,13 +487,23 @@ client.on('messageCreate', async (message) => {
   }
 
   const threadId = message.channel.id;
+  const ptySession = ptyManager.activeSessions.get(threadId);
   const task = processManager.activeTasks.get(threadId);
   const content = message.content.trim();
   if (content.length === 0) return;
 
+  // 1. If it's a PTY Session
+  if (ptySession) {
+    try {
+      await message.react('⌨️');
+      await ptyManager.sendInput(threadId, content);
+    } catch (e) {}
+    return;
+  }
+
   console.log(`[Thread Message] ID: ${threadId}, Author: ${message.author.tag}, Content: "${content}", ActiveTask: ${!!task}`);
 
-  // If there is an active agent task running in this thread
+  // 2. If there is an active agent task running in this thread (Headless)
   if (task) {
     // React to confirm we are piping this message to stdin
     try {
@@ -1150,16 +1167,24 @@ async function handleExportCommand(interaction) {
 async function handleKillCommand(interaction) {
   const threadId = interaction.channelId;
   const task = processManager.activeTasks.get(threadId);
+  const ptySession = ptyManager.activeSessions.get(threadId);
 
-  if (!task) {
+  if (!task && !ptySession) {
     return interaction.reply({
-      content: '❌ No active agent task found in this thread.',
+      content: '❌ No active agent task or terminal session found in this thread.',
       ephemeral: true
     });
   }
 
   await interaction.reply('🛑 **Forcefully terminating active shell process...**');
-  const success = await processManager.killTask(threadId);
+  
+  let success = false;
+  if (task) {
+    success = await processManager.killTask(threadId);
+  } else if (ptySession) {
+    success = await ptyManager.killSession(threadId);
+  }
+
   if (!success) {
     await interaction.followUp({
       content: '❌ Failed to terminate process.',
@@ -1429,7 +1454,8 @@ async function updateSessionsList(interactionOrMessage) {
     metadataEntries.forEach(([id, meta]) => {
       const tool = (meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase();
       const project = meta.directory.split('/').pop() || 'Unknown';
-      const status = processManager.activeTasks.has(id) ? '🟢 Running' : '⚪ Idle';
+      const isRunning = processManager.activeTasks.has(id) || ptyManager.activeSessions.has(id);
+      const status = isRunning ? '🟢 Running' : '⚪ Idle';
       const name = meta.threadName || `Thread #${id}`;
       
       embed.addFields({
@@ -1522,8 +1548,9 @@ async function updateDashboard() {
     .setTimestamp();
 
   const activeTasks = [...processManager.activeTasks.values()];
+  const activePtySessions = [...ptyManager.activeSessions.values()];
   
-  if (activeTasks.length === 0) {
+  if (activeTasks.length === 0 && activePtySessions.length === 0) {
     embed.setDescription('✅ **All systems operational.** No active agent tasks running.');
   } else {
     let taskList = '';
@@ -1531,6 +1558,12 @@ async function updateDashboard() {
       const duration = processManager.formatDuration(Date.now() - task.startTime);
       taskList += `🔸 **${(task.tool === 'agy' ? 'antigravity' : task.tool).toUpperCase()}** in <#${task.threadId}>\n`;
       taskList += `   └ Status: \`${task.status}\` | Duration: \`${duration}\`\n\n`;
+    });
+
+    activePtySessions.forEach(session => {
+      const duration = processManager.formatDuration(Date.now() - session.startTime);
+      taskList += `📟 **[PTY] ${session.tool.toUpperCase()}** in <#${session.threadId}>\n`;
+      taskList += `   └ Status: \`INTERACTIVE\` | Duration: \`${duration}\`\n\n`;
     });
     embed.setDescription(taskList);
   }
@@ -1570,6 +1603,80 @@ async function handleDashboardButton(interaction) {
       return;
     }
     await updateSessionsList(interaction);
+  }
+}
+
+/**
+ * COMMAND HANDLER: /terminal
+ */
+async function handleTerminalCommand(interaction) {
+  const tool = (interaction.options.getString('tool') || 'bash').toLowerCase();
+  const directory = interaction.options.getString('directory');
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch (err) {
+    console.warn('Failed to defer reply for terminal command:', err.message);
+    return;
+  }
+
+  const { gateway, project: inferredProject } = resolveGatewayAndProject(interaction.channel);
+
+  // Resolve directory path
+  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
+  let resolvedDirectory = directory;
+
+  if (!resolvedDirectory && inferredProject) {
+    if (PROJECTS_ROOT) {
+      const os = require('os');
+      let resolvedRoot = PROJECTS_ROOT;
+      if (PROJECTS_ROOT.startsWith('~')) {
+        resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
+      }
+      resolvedDirectory = path.join(resolvedRoot, inferredProject);
+    }
+  }
+
+  if (!resolvedDirectory) {
+    return interaction.editReply({
+      content: '❌ **Directory required:** Please specify the \`directory\` option or run the command from a project-specific channel.'
+    });
+  }
+
+  try {
+    const threadName = `📟 [PTY] ${tool.toUpperCase()} in ${resolvedDirectory.split('/').pop()}`;
+    const thread = await interaction.channel.threads.create({
+      name: threadName,
+      autoArchiveDuration: 1440,
+      reason: 'Interactive PTY Start'
+    });
+
+    await thread.send(`### 📟 Persistent PTY Session Initiated
+* **Tool:** \`${tool.toUpperCase()}\`
+* **Directory:** \`${resolvedDirectory}\`
+* **Type:** \`INTERACTIVE PTY\`
+---
+*Note: Any message sent in this thread will be piped directly to the terminal's stdin as keystrokes.*`);
+
+    await ptyManager.startSession({
+      thread,
+      tool,
+      directory: resolvedDirectory
+    });
+
+    // Record metadata
+    threadMetadata.set(thread.id, { 
+      tool, 
+      directory: resolvedDirectory, 
+      isPty: true,
+      hasStarted: true 
+    });
+    saveMetadata();
+
+    await interaction.editReply({ content: `✅ Terminal session started in <#${thread.id}>` });
+  } catch (err) {
+    console.error('PTY task start failed:', err);
+    await interaction.editReply({ content: `❌ Failed to start terminal: ${err.message}` });
   }
 }
 
