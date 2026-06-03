@@ -34,29 +34,53 @@ async function performGitPullAndRestart(triggerSource) {
   const statusMsg = `🔄 **Restarting Gateway [${currentGateway}]...**\n\n**Git Pull Output:**\n${outputText}`;
   console.log(statusMsg.replace(/\*+/g, ''));
 
-  if (triggerSource && typeof triggerSource.editReply === 'function') {
+  // Try to find the existing online message to reuse
+  let gatewayChannel = null;
+  if (GUILD_ID) {
     try {
-      await triggerSource.editReply({ content: statusMsg });
-    } catch (e) {}
-  } else if (triggerSource && typeof triggerSource.send === 'function') {
-    try {
-      await triggerSource.send(statusMsg);
-    } catch (e) {}
-  } else {
-    // If triggered via keyboard shortcut in terminal, send status to the gateway text channel
-    try {
-      const channelName = currentGateway.toLowerCase();
-      if (GUILD_ID) {
-        const guild = client.guilds.cache.get(GUILD_ID);
-        if (guild) {
-          const gatewayChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
-          if (gatewayChannel) {
-            await gatewayChannel.send(statusMsg);
-          }
-        }
+      const guild = client.guilds.cache.get(GUILD_ID);
+      if (guild) {
+        const channelName = currentGateway.toLowerCase();
+        gatewayChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
       }
+    } catch (e) {}
+  }
+
+  let reusedMessage = null;
+  if (gatewayChannel) {
+    try {
+      const messages = await gatewayChannel.messages.fetch({ limit: 50 });
+      reusedMessage = messages.find(m => 
+        m.author.id === client.user.id && 
+        (m.content && (m.content.includes('is online and ready to receive tasks') || m.content.includes('Restarting Gateway')))
+      );
     } catch (e) {
-      console.error('Failed to notify Discord of keyboard restart:', e.message);
+      console.warn('Failed to fetch messages for restart update:', e.message);
+    }
+  }
+
+  if (reusedMessage) {
+    try {
+      await reusedMessage.edit({ content: statusMsg, components: [] });
+    } catch (e) {
+      console.warn('Failed to edit online message for restart:', e.message);
+    }
+  } else if (gatewayChannel) {
+    try {
+      await gatewayChannel.send(statusMsg);
+    } catch (e) {}
+  }
+
+  // Also reply to trigger source if it is an interaction or other message
+  if (triggerSource) {
+    if (typeof triggerSource.editReply === 'function') {
+      try {
+        await triggerSource.editReply({ content: statusMsg });
+      } catch (e) {}
+    } else if (typeof triggerSource.send === 'function' && (!gatewayChannel || triggerSource.channelId !== gatewayChannel.id)) {
+      try {
+        await triggerSource.send(statusMsg);
+      } catch (e) {}
     }
   }
 

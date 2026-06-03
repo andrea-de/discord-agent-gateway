@@ -127,7 +127,7 @@ async function initGatewayMessages(gatewayChannel) {
 
     uiState.onlineMessage = messages.find(m => 
       m.author.id === client.user.id && 
-      (m.content && m.content.includes('is online and ready to receive tasks'))
+      (m.content && (m.content.includes('is online and ready to receive tasks') || m.content.includes('Restarting Gateway')))
     );
 
     uiState.infoMessage = messages.find(m => 
