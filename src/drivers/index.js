@@ -9,7 +9,11 @@ const drivers = {
 };
 
 function getDriver(tool) {
-  const driver = drivers[tool.toLowerCase()];
+  let normalizedTool = tool.toLowerCase();
+  if (normalizedTool === 'antigravity') {
+    normalizedTool = 'agy';
+  }
+  const driver = drivers[normalizedTool];
   if (!driver) {
     throw new Error(`No registered driver found for tool: ${tool}`);
   }

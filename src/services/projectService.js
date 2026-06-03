@@ -6,29 +6,49 @@ const { currentGateway } = require('../utils/state');
 const { KNOWN_GATEWAYS, CUSTOM_IDS } = require('../utils/constants');
 
 function resolveProjectDirectory(projectName) {
+  console.log(`[resolveProjectDirectory] Attempting to resolve project: "${projectName}"`);
   const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
-  if (!PROJECTS_ROOT || !projectName) return null;
+  console.log(`[resolveProjectDirectory] process.env.PROJECTS_ROOT: "${PROJECTS_ROOT}"`);
+  if (!PROJECTS_ROOT || !projectName) {
+    console.log(`[resolveProjectDirectory] PROJECTS_ROOT or projectName missing`);
+    return null;
+  }
   const cleanProjectName = projectName.trim();
 
   let resolvedRoot = PROJECTS_ROOT;
   if (PROJECTS_ROOT.startsWith('~')) {
     resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
   }
+  console.log(`[resolveProjectDirectory] resolvedRoot: "${resolvedRoot}"`);
 
   const targetPath = path.join(resolvedRoot, cleanProjectName);
-  if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
-    return targetPath;
+  console.log(`[resolveProjectDirectory] targetPath: "${targetPath}"`);
+  if (fs.existsSync(targetPath)) {
+    const isDir = fs.statSync(targetPath).isDirectory();
+    console.log(`[resolveProjectDirectory] targetPath exists. Is Directory: ${isDir}`);
+    if (isDir) {
+      return targetPath;
+    }
+  } else {
+    console.log(`[resolveProjectDirectory] targetPath does not exist.`);
   }
 
   if (fs.existsSync(resolvedRoot) && fs.statSync(resolvedRoot).isDirectory()) {
+    console.log(`[resolveProjectDirectory] resolvedRoot exists. Scanning subdirectories for case-insensitive match...`);
     const match = fs.readdirSync(resolvedRoot)
       .find(item => item.toLowerCase() === cleanProjectName.toLowerCase());
     if (match) {
       const matchedPath = path.join(resolvedRoot, match);
-      if (fs.statSync(matchedPath).isDirectory()) {
+      const isDir = fs.statSync(matchedPath).isDirectory();
+      console.log(`[resolveProjectDirectory] Case-insensitive match found: "${match}". Is Directory: ${isDir}`);
+      if (isDir) {
         return matchedPath;
       }
+    } else {
+      console.log(`[resolveProjectDirectory] No case-insensitive match found.`);
     }
+  } else {
+    console.log(`[resolveProjectDirectory] resolvedRoot does not exist or is not a directory.`);
   }
 
   return null;

@@ -155,27 +155,37 @@ async function handleProjectButton(interaction) {
           await interaction.editReply({ content: `❌ Failed to start terminal: ${err.message}` });
         }
       } else {
-        // Open Modal to enter Prompt for the specific tool
-        const displayTool = tool === 'agy' ? 'Agy' : tool.toUpperCase();
-        
-        // Formulate a clean modal title under 45 characters
-        const fullTitle = `Start ${displayTool} | ${inferredProject}`;
-        const modalTitle = fullTitle.substring(0, 45);
+        // Start tool thread directly without a modal
+        await interaction.deferReply({ ephemeral: true });
+        try {
+          const displayToolName = tool === 'antigravity' ? 'antigravity' : (tool === 'agy' ? 'antigravity' : tool);
+          const threadName = `[${displayToolName}] Interactive Session`;
+          const thread = await channel.threads.create({
+            name: threadName,
+            autoArchiveDuration: 1440,
+            reason: 'Agent Gateway Direct Start'
+          });
 
-        const modal = new ModalBuilder()
-          .setCustomId(`session-modal:${gateway}:${tool}`)
-          .setTitle(modalTitle);
+          await thread.send(`### 🤖 Session Initiated via Dashboard
+* **Tool:** \`${displayToolName.toUpperCase()}\`
+* **Directory:** \`${resolvedDirectory}\`
+* **Prompt:** *Awaiting first prompt in thread...*`);
 
-        const promptInput = new TextInputBuilder()
-          .setCustomId('prompt')
-          .setLabel('Initial Task / Prompt')
-          .setPlaceholder('Enter your first prompt here...')
-          .setRequired(false)
-          .setStyle(TextInputStyle.Paragraph);
+          await thread.send('⌨️ **Gateway Awaiting First Prompt**');
 
-        const row = new ActionRowBuilder().addComponents(promptInput);
-        modal.addComponents(row);
-        return interaction.showModal(modal);
+          threadMetadata.set(thread.id, {
+            tool: tool === 'antigravity' ? 'agy' : (tool === 'agy' ? 'agy' : tool),
+            directory: resolvedDirectory,
+            mode: 'review',
+            hasStarted: false
+          });
+          saveMetadata();
+
+          await interaction.editReply({ content: `✅ Session started in <#${thread.id}>` });
+        } catch (err) {
+          console.error('Task start failed:', err);
+          await interaction.editReply({ content: `❌ Failed to start session: ${err.message}` });
+        }
       }
 
     } else if (action === 'history') {
