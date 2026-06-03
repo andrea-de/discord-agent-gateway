@@ -12,7 +12,16 @@ const buttonHandlers = require('./buttonHandlers');
 const modalHandlers = require('./modalHandlers');
 
 async function handleInteraction(interaction) {
-  if (!isTargetForInteraction(interaction)) {
+  const typeDisplay = interaction.isChatInputCommand() ? `Command (/${interaction.commandName})` :
+                      interaction.isButton() ? `Button (${interaction.customId})` :
+                      interaction.isModalSubmit() ? `Modal (${interaction.customId})` : `Type ${interaction.type}`;
+  const channelName = interaction.channel ? interaction.channel.name : 'Unknown';
+  console.log(`[Interaction] Received ${typeDisplay} in channel #${channelName}`);
+
+  const isTarget = isTargetForInteraction(interaction);
+  console.log(`[Interaction] Target check: ${isTarget ? 'MATCH (Handling)' : 'MISMATCH (Ignoring)'}`);
+
+  if (!isTarget) {
     return; // Ignore if this instance is not the target
   }
 
