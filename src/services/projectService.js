@@ -64,6 +64,8 @@ function listProjectDirectories() {
 }
 
 function resolveGatewayAndProject(channel) {
+  if (!channel || typeof channel.isThread !== 'function') return { gateway: null, project: null };
+  
   let textChannel = channel;
   if (channel.isThread()) {
     textChannel = channel.parent;
