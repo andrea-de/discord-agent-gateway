@@ -88,7 +88,7 @@ async function handleProjectButton(interaction) {
   const customId = interaction.customId;
   const parts = customId.split(':');
   
-  // Custom ID format: project:${gateway}:${action}:${optionalTool}
+  // Custom ID format: gateway-project:${gateway}:${action}:${optionalTool}
   const gateway = parts[1];
   const action = parts[2];
   const tool = parts[3];
@@ -106,20 +106,7 @@ async function handleProjectButton(interaction) {
     });
   }
 
-  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
-  let resolvedDirectory = null;
-
-  if (PROJECTS_ROOT) {
-    const os = require('os');
-    let resolvedRoot = PROJECTS_ROOT;
-    if (PROJECTS_ROOT.startsWith('~')) {
-      resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
-    }
-    const targetPath = path.join(resolvedRoot, inferredProject);
-    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
-      resolvedDirectory = targetPath;
-    }
-  }
+  const resolvedDirectory = resolveProjectDirectory(inferredProject);
 
   if (!resolvedDirectory) {
     return interaction.reply({
@@ -169,9 +156,15 @@ async function handleProjectButton(interaction) {
         }
       } else {
         // Open Modal to enter Prompt for the specific tool
+        const displayTool = tool === 'agy' ? 'Agy' : tool.toUpperCase();
+        
+        // Formulate a clean modal title under 45 characters
+        const fullTitle = `Start ${displayTool} | ${inferredProject}`;
+        const modalTitle = fullTitle.substring(0, 45);
+
         const modal = new ModalBuilder()
           .setCustomId(`session-modal:${gateway}:${tool}`)
-          .setTitle(`New Session: ${tool === 'antigravity' ? 'Antigravity' : tool.toUpperCase()} - ${inferredProject}`);
+          .setTitle(modalTitle);
 
         const promptInput = new TextInputBuilder()
           .setCustomId('prompt')

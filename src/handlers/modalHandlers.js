@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const processManager = require('../processManager');
 const { threadMetadata, saveMetadata } = require('../utils/state');
-const { resolveGatewayAndProject } = require('../services/projectService');
+const { resolveGatewayAndProject, resolveProjectDirectory } = require('../services/projectService');
 
 async function handleSessionModal(interaction) {
   const parts = interaction.customId.split(':');
@@ -11,20 +11,7 @@ async function handleSessionModal(interaction) {
   
   const { project: inferredProject } = resolveGatewayAndProject(interaction.channel);
   
-  const PROJECTS_ROOT = process.env.PROJECTS_ROOT;
-  let resolvedDirectory = null;
-
-  if (PROJECTS_ROOT && inferredProject) {
-    const os = require('os');
-    let resolvedRoot = PROJECTS_ROOT;
-    if (PROJECTS_ROOT.startsWith('~')) {
-      resolvedRoot = path.join(os.homedir(), PROJECTS_ROOT.substring(1));
-    }
-    const targetPath = path.join(resolvedRoot, inferredProject);
-    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
-      resolvedDirectory = targetPath;
-    }
-  }
+  const resolvedDirectory = resolveProjectDirectory(inferredProject);
 
   if (!resolvedDirectory) {
     return interaction.reply({ content: '❌ Could not resolve directory for this project.', ephemeral: true });

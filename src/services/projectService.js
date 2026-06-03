@@ -122,7 +122,7 @@ function isTargetForInteraction(interaction) {
   // 1. Explicit button target validation to prevent cross-gateway execution
   if (interaction.isButton()) {
     const customId = interaction.customId;
-    if (customId.startsWith('project:')) {
+    if (customId.startsWith('gateway-project:')) {
       const parts = customId.split(':');
       const gw = parts[1];
       if (gw && KNOWN_GATEWAYS.includes(gw.toUpperCase())) {
@@ -132,6 +132,18 @@ function isTargetForInteraction(interaction) {
     if (customId.startsWith('gateway:open-project:')) {
       const parts = customId.substring('gateway:open-project:'.length).split(':');
       const gw = parts[0];
+      if (gw && KNOWN_GATEWAYS.includes(gw.toUpperCase())) {
+        return gw.toUpperCase() === currentGateway;
+      }
+    }
+  }
+
+  // 1b. Explicit modal target validation to prevent cross-gateway execution
+  if (interaction.isModalSubmit()) {
+    const customId = interaction.customId;
+    if (customId.startsWith('session-modal:')) {
+      const parts = customId.split(':');
+      const gw = parts[1];
       if (gw && KNOWN_GATEWAYS.includes(gw.toUpperCase())) {
         return gw.toUpperCase() === currentGateway;
       }

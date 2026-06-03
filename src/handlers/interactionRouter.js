@@ -53,7 +53,7 @@ async function handleInteraction(interaction) {
     const customId = interaction.customId;
     if (customId.startsWith('choice:')) {
       await buttonHandlers.handleChoiceButton(interaction);
-    } else if (customId.startsWith('project:')) {
+    } else if (customId.startsWith('gateway-project:')) {
       await buttonHandlers.handleProjectButton(interaction);
     } else if (customId.startsWith('thread:')) {
       await buttonHandlers.handleThreadButton(interaction);
