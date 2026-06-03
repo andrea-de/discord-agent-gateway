@@ -266,63 +266,7 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
       }
       projectChannel = await guild.channels.create(channelOpts);
 
-      const embed = new EmbedBuilder()
-        .setTitle(`📁 Project Dashboard: ${projectDirName}`)
-        .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively start agent sessions or query project info.`)
-        .setColor('#2b2d31')
-        .addFields(
-          { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
-          { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true },
-          { name: 'Active Sessions', value: '*No active sessions.*' }
-        );
-
-      const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
-          .setLabel('Antigravity')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('🤖'),
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
-          .setLabel('Gemini')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('♊'),
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
-          .setLabel('Codex')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('🧠'),
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
-          .setLabel('Terminal')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('📟')
-      );
-
-      const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
-          .setLabel('History')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('📂'),
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
-          .setLabel('README')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('📖'),
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
-          .setLabel('Files')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('📁'),
-        new ButtonBuilder()
-          .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
-          .setLabel('Git')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('🌿')
-      );
-
-      await projectChannel.send({ embeds: [embed], components: [row1, row2] });
+      await sendProjectDashboard(projectChannel, resolvedDirectory);
     }
     targetChannel = projectChannel;
   } catch (err) {
@@ -373,6 +317,85 @@ async function updateProjectDashboard(channel) {
   }
 }
 
+async function sendProjectDashboard(channel, resolvedDirectory) {
+  const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
+  
+  // Fetch active threads in the channel
+  let threadsValue = '*No active sessions.*';
+  try {
+    const fetched = await channel.threads.fetchActive();
+    const threads = Array.from(fetched.threads.values());
+    if (threads.length > 0) {
+      threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
+    }
+  } catch (e) {
+    console.warn('Failed to fetch active threads for dashboard send:', e.message);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📁 Project Dashboard: ${projectDirName}`)
+    .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively start agent sessions or query project info.`)
+    .setColor('#2b2d31')
+    .addFields(
+      { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
+      { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true },
+      { name: 'Active Sessions', value: threadsValue }
+    );
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
+      .setLabel('Antigravity')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🤖'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
+      .setLabel('Gemini')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('♊'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
+      .setLabel('Codex')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🧠'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
+      .setLabel('Terminal')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('📟')
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
+      .setLabel('History')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📂'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
+      .setLabel('README')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📖'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
+      .setLabel('Files')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📁'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
+      .setLabel('Git')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🌿'),
+    new ButtonBuilder()
+      .setCustomId(CUSTOM_IDS.PROJECT.CLEAN(currentGateway))
+      .setLabel('Clean')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🧹')
+  );
+
+  return channel.send({ embeds: [embed], components: [row1, row2] });
+}
+
 module.exports = {
   resolveProjectDirectory,
   listProjectDirectories,
@@ -380,4 +403,5 @@ module.exports = {
   isTargetForInteraction,
   getOrCreateProjectChannel,
   updateProjectDashboard,
+  sendProjectDashboard,
 };

@@ -10,6 +10,7 @@ const CUSTOM_IDS = {
     README: (gateway) => `gateway-project:${gateway}:readme`,
     FILES: (gateway) => `gateway-project:${gateway}:files`,
     GIT: (gateway) => `gateway-project:${gateway}:git`,
+    CLEAN: (gateway) => `gateway-project:${gateway}:clean`,
   },
   THREAD: {
     CONFIRM_DELETE: 'thread:confirm-delete',

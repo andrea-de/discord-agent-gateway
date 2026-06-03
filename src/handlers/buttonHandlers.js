@@ -4,7 +4,7 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBui
 const processManager = require('../processManager');
 const ptyManager = require('../ptyManager');
 const { currentGateway, threadMetadata, saveMetadata, uiState } = require('../utils/state');
-const { resolveGatewayAndProject, resolveProjectDirectory, getOrCreateProjectChannel } = require('../services/projectService');
+const { resolveGatewayAndProject, resolveProjectDirectory, getOrCreateProjectChannel, sendProjectDashboard } = require('../services/projectService');
 const { updateSessionsList, updateGatewayInfoMessage } = require('../services/statusUiService');
 
 async function handleChoiceButton(interaction) {
@@ -186,6 +186,42 @@ async function handleProjectButton(interaction) {
           console.error('Task start failed:', err);
           await interaction.editReply({ content: `❌ Failed to start session: ${err.message}` });
         }
+      }
+
+    } else if (action === 'clean') {
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        const channel = interaction.channel;
+        const messages = await channel.messages.fetch({ limit: 100 });
+        
+        const fourteenDaysAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+        const toBulkDelete = [];
+        const toDeleteIndividually = [];
+
+        messages.forEach(msg => {
+          if (msg.createdTimestamp > fourteenDaysAgo) {
+            toBulkDelete.push(msg);
+          } else {
+            toDeleteIndividually.push(msg);
+          }
+        });
+
+        if (toBulkDelete.length > 0) {
+          await channel.bulkDelete(toBulkDelete);
+        }
+        for (const msg of toDeleteIndividually) {
+          try {
+            await msg.delete();
+          } catch (e) {}
+        }
+
+        // Reprint the dashboard
+        await sendProjectDashboard(channel, resolvedDirectory);
+
+        await interaction.editReply({ content: '🧹 Parent channel messages cleared and dashboard reprinted successfully.' });
+      } catch (err) {
+        console.error('Failed to clean channel messages:', err);
+        await interaction.editReply({ content: `❌ Failed to clean channel: ${err.message}` });
       }
 
     } else if (action === 'history') {
