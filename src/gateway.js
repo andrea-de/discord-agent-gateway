@@ -651,6 +651,99 @@ function isTargetForInteraction(interaction) {
 }
 
 /**
+ * Helper to ensure a Gateway Category and Project Channel exist for a given directory.
+ * Returns the target channel and an optional permission warning.
+ */
+async function getOrCreateProjectChannel(guild, resolvedDirectory) {
+  const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
+  const baseChannelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  const channelName = `${baseChannelName}-${currentGateway.toLowerCase()}`;
+  const categoryName = `${currentGateway} GATEWAY`;
+  
+  let targetChannel = null;
+  let permissionWarning = null;
+
+  try {
+    // 1. Find or create the Gateway category
+    let category = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
+    if (!category) {
+      try {
+        category = await guild.channels.create({
+          name: categoryName,
+          type: ChannelType.GuildCategory
+        });
+      } catch (catErr) {
+        console.warn(`Could not create category "${categoryName}":`, catErr.message);
+        if (catErr.code === 50013 || catErr.status === 403) {
+          permissionWarning = `Missing "Manage Channels" permission to create the "${categoryName}" category.`;
+        }
+      }
+    }
+
+    // 2. Find or create the project-specific text channel
+    let projectChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
+    if (!projectChannel) {
+      const channelOpts = {
+        name: channelName,
+        type: ChannelType.GuildText,
+        reason: `Auto-provisioned text channel for directory: ${resolvedDirectory}`
+      };
+      if (category) {
+        channelOpts.parent = category.id;
+      }
+      projectChannel = await guild.channels.create(channelOpts);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📁 Project Dashboard: ${projectDirName}`)
+        .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively query project info ephemerally.`)
+        .setColor('#2b2d31')
+        .addFields(
+          { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
+          { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
+        );
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('project:new-session')
+          .setLabel('New Session')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🚀'),
+        new ButtonBuilder()
+          .setCustomId('project:history')
+          .setLabel('History')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📂'),
+        new ButtonBuilder()
+          .setCustomId('project:readme')
+          .setLabel('README')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📖'),
+        new ButtonBuilder()
+          .setCustomId('project:files')
+          .setLabel('Files')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('📁'),
+        new ButtonBuilder()
+          .setCustomId('project:git')
+          .setLabel('Git')
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji('🌿')
+      );
+
+      await projectChannel.send({ embeds: [embed], components: [row] });
+    }
+    targetChannel = projectChannel;
+  } catch (err) {
+    console.error('Failed to provision project channel:', err);
+    if (err.code === 50013 || err.status === 403) {
+      permissionWarning = 'Missing "Manage Channels" permission to create project text channels.';
+    }
+  }
+
+  return { targetChannel, permissionWarning };
+}
+
+/**
  * COMMAND HANDLER: /agent
  */
 async function handleAgentCommand(interaction) {
@@ -758,92 +851,9 @@ async function handleAgentCommand(interaction) {
     });
   }
 
-  // Derive project channel name from the resolved directory path
-  const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
-  const baseChannelName = projectDirName.toLowerCase().replace(/[^a-z0-9_-]/g, '');
-  const channelName = `${baseChannelName}-${currentGateway.toLowerCase()}`;
-
-  let targetChannel = channel;
-  let permissionWarning = null;
+  const { targetChannel: projectChannel, permissionWarning } = await getOrCreateProjectChannel(guild, resolvedDirectory);
+  const targetChannel = projectChannel || channel;
   const categoryName = `${currentGateway} GATEWAY`;
-
-  try {
-    // 1. Find or create the Gateway category (e.g. HELSINKI GATEWAY)
-    let category = guild.channels.cache.find(c => c.name === categoryName && c.type === ChannelType.GuildCategory);
-    if (!category) {
-      try {
-        category = await guild.channels.create({
-          name: categoryName,
-          type: ChannelType.GuildCategory
-        });
-      } catch (catErr) {
-        console.warn(`Could not create category "${categoryName}":`, catErr.message);
-        if (catErr.code === 50013 || catErr.status === 403) {
-          permissionWarning = `Missing "Manage Channels" permission to create the "${categoryName}" category.`;
-        }
-      }
-    }
-
-    // 2. Find or create the project-specific text channel under that category
-    let projectChannel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
-    if (!projectChannel) {
-      const channelOpts = {
-        name: channelName,
-        type: ChannelType.GuildText,
-        reason: `Auto-provisioned text channel for directory: ${resolvedDirectory}`
-      };
-      if (category) {
-        channelOpts.parent = category.id;
-      }
-      projectChannel = await guild.channels.create(channelOpts);
-
-      const embed = new EmbedBuilder()
-        .setTitle(`📁 Project Dashboard: ${projectDirName}`)
-        .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively query project info ephemerally.`)
-        .setColor('#2b2d31')
-        .addFields(
-          { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
-          { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
-        );
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('project:new-session')
-          .setLabel('New Session')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('🚀'),
-        new ButtonBuilder()
-          .setCustomId('project:history')
-          .setLabel('History')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('📂'),
-        new ButtonBuilder()
-          .setCustomId('project:readme')
-          .setLabel('README')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('📖'),
-        new ButtonBuilder()
-          .setCustomId('project:files')
-          .setLabel('Files')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('📁'),
-        new ButtonBuilder()
-          .setCustomId('project:git')
-          .setLabel('Git')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('🌿')
-      );
-
-      await projectChannel.send({ embeds: [embed], components: [row] });
-    }
-    targetChannel = projectChannel;
-  } catch (chanErr) {
-    console.error('Failed to resolve project channel, falling back to current channel:', chanErr);
-    if (chanErr.code === 50013 || chanErr.status === 403) {
-      permissionWarning = 'Missing "Manage Channels" permission to create project text channels.';
-    }
-    targetChannel = channel;
-  }
 
   try {
     // 1. Initiate thread
@@ -1643,9 +1653,13 @@ async function handleTerminalCommand(interaction) {
     });
   }
 
+  const { targetChannel: projectChannel, permissionWarning } = await getOrCreateProjectChannel(interaction.guild, resolvedDirectory);
+  const targetChannel = projectChannel || interaction.channel;
+  const categoryName = `${currentGateway} GATEWAY`;
+
   try {
     const threadName = `📟 [PTY] ${tool.toUpperCase()} in ${resolvedDirectory.split('/').pop()}`;
-    const thread = await interaction.channel.threads.create({
+    const thread = await targetChannel.threads.create({
       name: threadName,
       autoArchiveDuration: 1440,
       reason: 'Interactive PTY Start'
@@ -1657,6 +1671,11 @@ async function handleTerminalCommand(interaction) {
 * **Type:** \`INTERACTIVE PTY\`
 ---
 *Note: Any message sent in this thread will be piped directly to the terminal's stdin as keystrokes.*`);
+
+    if (permissionWarning) {
+      const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=105226685456&scope=bot%20applications.commands`;
+      await thread.send(`⚠️ **Notice:** ${permissionWarning} Thread fell back to the current channel (<#${interaction.channel.id}>). To enable auto-channel creation for new projects under an **${categoryName}** category, please grant the bot the **Manage Channels** permission, or [click here to re-authorize the bot](${inviteUrl}).`);
+    }
 
     await ptyManager.startSession({
       thread,
