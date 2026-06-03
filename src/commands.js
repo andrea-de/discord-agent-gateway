@@ -229,6 +229,12 @@ const commands = [
       option.setName('tool')
         .setDescription('Tool to run in the terminal (gemini, bash, agy, codex)')
         .setRequired(false)
+        .addChoices(
+          { name: 'Bash', value: 'bash' },
+          { name: 'Gemini', value: 'gemini' },
+          { name: 'Codex', value: 'codex' },
+          { name: 'Antigravity', value: 'agy' }
+        )
     )
     .addStringOption(option =>
       option.setName('directory')
@@ -246,8 +252,12 @@ const commands = [
     .setDescription('Exports this thread session log to a markdown file in the project directory'),
 
   new SlashCommandBuilder()
-    .setName('kill')
-    .setDescription('Forcefully terminates the active agent task and archives this thread'),
+    .setName('archive-thread')
+    .setDescription('Terminates any active process and archives this thread'),
+
+  new SlashCommandBuilder()
+    .setName('stop')
+    .setDescription('Stops the active headless agent request without archiving the thread'),
 
   new SlashCommandBuilder()
     .setName('restart')

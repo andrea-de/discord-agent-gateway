@@ -595,6 +595,28 @@ function resolveGatewayAndProject(channel) {
     const knownGateways = ['HELSINKI', 'NUREMBERG', 'XPS']; // Standard gateways
     if (knownGateways.includes(channelNameClean)) {
       gateway = channelNameClean;
+    } else {
+      // Check if text channel name ends with any known gateway suffix (e.g. -helsinki)
+      for (const gw of knownGateways) {
+        const suffix = `-${gw.toLowerCase()}`;
+        if (textChannel.name.toLowerCase().endsWith(suffix)) {
+          gateway = gw;
+          project = textChannel.name.substring(0, textChannel.name.length - suffix.length);
+          break;
+        }
+      }
+
+      // Fallback: check if the possible project name is a directory under the current gateway
+      if (!gateway) {
+        const suffix = `-${currentGateway.toLowerCase()}`;
+        const possibleProject = textChannel.name.endsWith(suffix)
+          ? textChannel.name.substring(0, textChannel.name.length - suffix.length)
+          : textChannel.name;
+        if (resolveProjectDirectory(possibleProject)) {
+          gateway = currentGateway;
+          project = possibleProject;
+        }
+      }
     }
   }
   
@@ -611,6 +633,12 @@ function isTargetForInteraction(interaction) {
     }
   } catch (e) {}
 
+  // 2. Resolve gateway using resolveGatewayAndProject
+  const { gateway: inferredGateway } = resolveGatewayAndProject(interaction.channel);
+  if (inferredGateway) {
+    return inferredGateway === currentGateway;
+  }
+
   const channel = interaction.channel;
   if (!channel) return false;
   
@@ -621,7 +649,7 @@ function isTargetForInteraction(interaction) {
   if (!textChannel) return false;
 
   let channelGateway = null;
-  // 2. Check parent category name (e.g. "HELSINKI GATEWAY")
+  // Check parent category name (e.g. "HELSINKI GATEWAY")
   const parentCategory = textChannel.parent;
   if (parentCategory && parentCategory.name.endsWith(' GATEWAY')) {
     channelGateway = parentCategory.name.replace(' GATEWAY', '').trim().toUpperCase();
@@ -630,7 +658,7 @@ function isTargetForInteraction(interaction) {
     }
   }
 
-  // 3. Check text channel name (e.g. #helsinki -> matches HELSINKI)
+  // Check text channel name (e.g. #helsinki -> matches HELSINKI)
   const channelNameClean = textChannel.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (channelNameClean === currentGateway) {
     return true;
@@ -642,7 +670,7 @@ function isTargetForInteraction(interaction) {
     return false;
   }
 
-  // 4. Default: If run in general and no option is specified, let XPS act as default responder to explain
+  // Default: If run in general and no option is specified, let XPS act as default responder to explain
   if (!chosenGateway && !channelGateway) {
     return currentGateway === 'XPS';
   }

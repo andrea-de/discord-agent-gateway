@@ -116,6 +116,7 @@ class ProcessManager extends EventEmitter {
       lastOutputTime: Date.now(),
       lastLogMessage: null,
       promptMessage: null,
+      controlMessage: null,
       previousHistoryText,
       processStdoutAccumulator: '',
       flushedNewContentLength: 0,
@@ -158,6 +159,23 @@ Time: ${taskContext.startTime.toISOString()}
     taskContext.flushTimer = setInterval(() => {
       this.flushLogsToDiscord(taskContext);
     }, 1500);
+
+    const controlRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`process:stop:${threadId}`)
+        .setLabel('Stop Request')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🛑')
+    );
+
+    try {
+      taskContext.controlMessage = await thread.send({
+        content: '🟢 **Request running.**',
+        components: [controlRow]
+      });
+    } catch (err) {
+      console.error('Failed to send process control message:', err);
+    }
 
     return taskContext;
   }
@@ -423,7 +441,8 @@ Time: ${taskContext.startTime.toISOString()}
   /**
    * Forcefully terminates a running agent.
    */
-  async killTask(threadId) {
+  async killTask(threadId, options = {}) {
+    const { archiveThread = false } = options;
     const task = this.activeTasks.get(threadId);
     if (!task) return false;
 
@@ -446,18 +465,35 @@ Time: ${taskContext.startTime.toISOString()}
 
     // Notify thread
     await this.flushLogsToDiscord(task);
-    await task.thread.send('🛑 **Task process forcefully terminated by user. Thread archiving...**');
+    const terminationMessage = archiveThread
+      ? '🛑 **Task process forcefully terminated by user. Thread archiving...**'
+      : '🛑 **Task process stopped by user.**';
+    await task.thread.send(terminationMessage);
+    await this.clearControlButton(task, '🛑 **Request stopped.**');
 
-    // Archive and lock Discord Thread
-    try {
-      await task.thread.edit({ archived: true, locked: true });
-    } catch (err) {
-      console.error('Failed to archive thread:', err);
+    if (archiveThread) {
+      // Archive and lock Discord Thread
+      try {
+        await task.thread.edit({ archived: true, locked: true });
+      } catch (err) {
+        console.error('Failed to archive thread:', err);
+      }
     }
 
     fs.appendFileSync(task.fullLogFile, `\n--- SESSION FORCEFULLY TERMINATED BY USER ---`);
     this.activeTasks.delete(threadId);
     return true;
+  }
+
+  async clearControlButton(task, content) {
+    if (!task.controlMessage) return;
+
+    try {
+      await task.controlMessage.edit({ content, components: [] });
+    } catch (err) {
+      console.error('Failed to clear process control button:', err);
+    }
+    task.controlMessage = null;
   }
 
   /**
@@ -529,6 +565,7 @@ Time: ${taskContext.startTime.toISOString()}
 
     try {
       await task.thread.send(closingMsg);
+      await this.clearControlButton(task, code === 0 ? '✅ **Request complete.**' : '❌ **Request failed.**');
       // Clean up buttons if any prompt message exists
       if (task.promptMessage) {
         try {
@@ -568,6 +605,7 @@ Duration: ${durationStr}\n`);
     
     try {
       await task.thread.send(errMsg);
+      await this.clearControlButton(task, '❌ **Request failed.**');
     } catch (discordErr) {
       console.error('Failed to send error message:', discordErr);
     }

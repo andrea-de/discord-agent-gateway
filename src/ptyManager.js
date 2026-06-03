@@ -32,11 +32,13 @@ class PtyManager extends EventEmitter {
     }
     const extendedPath = paths.join(path.delimiter);
 
+    // Merge everything from process.env to ensure keys, tokens, and home paths are correct
     const spawnEnv = { 
       ...process.env,
       PATH: extendedPath,
       TERM: 'xterm-256color',
-      COLORTERM: 'truecolor'
+      COLORTERM: 'truecolor',
+      HOME: os.homedir()
     };
 
     // Determine command to run
@@ -72,8 +74,11 @@ class PtyManager extends EventEmitter {
       startTime: new Date(),
       status: 'INTERACTIVE',
       outputBuffer: '',
+      screen: this.createScreen(80, 24),
+      screenDirty: false,
       lastOutputTime: Date.now(),
       flushTimer: null,
+      displayMessage: null,
       sentMessages: [],
       fullLogFile: path.join(directory, `.gateway-pty-${tool}-${Date.now()}.log`)
     };
@@ -103,6 +108,8 @@ Time: ${sessionContext.startTime.toISOString()}
 
   handlePtyData(session, data) {
     session.outputBuffer += data;
+    this.applyTerminalData(session, data);
+    session.screenDirty = true;
     session.lastOutputTime = Date.now();
     
     // Also append to log file (stripping ANSI for the file)
@@ -110,52 +117,212 @@ Time: ${sessionContext.startTime.toISOString()}
   }
 
   async flushToDiscord(session) {
-    if (!session.outputBuffer) return;
+    if (!session.screenDirty) return;
+    session.outputBuffer = '';
+    session.screenDirty = false;
 
-    const rawContent = session.outputBuffer;
-    session.outputBuffer = ''; // Clear buffer immediately
+    const screenText = this.renderScreen(session.screen);
+    if (!screenText) return;
 
-    // Use Discord's ANSI code block for coloring
-    // We wrap it in ```ansi
-    const formattedContent = '```ansi\n' + this.sanitizeAnsiForDiscord(rawContent) + '\n```';
-
+    const formattedContent = '```\n' + screenText + '\n```';
     const pages = this.splitIntoPages(formattedContent);
+    const page = pages[pages.length - 1];
 
-    for (const page of pages) {
+    if (session.displayMessage) {
       try {
-        await session.thread.send(page);
+        await session.displayMessage.edit(page);
       } catch (err) {
-        console.error('Failed to send PTY output page:', err);
+        console.error('Failed to edit PTY display message:', err);
+        session.displayMessage = null;
+      }
+    }
+
+    if (!session.displayMessage) {
+      try {
+        session.displayMessage = await session.thread.send(page);
+      } catch (err) {
+        console.error('Failed to send PTY display message:', err);
       }
     }
   }
 
-  /**
-   * Basic sanitizer to keep some colors but remove complex PTY control sequences
-   * that Discord doesn't support or that would break the layout.
-   */
-  sanitizeAnsiForDiscord(text) {
-    // Discord supports basic colors but not cursor movement, clears, etc.
-    // For now, let's just strip everything but the basic color codes
-    // A more advanced version would map colors but strip cursor movements.
-    return text.replace(/\x1B\[[0-9;]*[JKmsuH]/g, (match) => {
-      if (match.endsWith('m')) return match; // Keep color/style codes
-      return ''; // Strip others
-    });
+  createScreen(cols, rows) {
+    return {
+      cols,
+      rows,
+      cursorRow: 0,
+      cursorCol: 0,
+      lines: Array.from({ length: rows }, () => '')
+    };
+  }
+
+  applyTerminalData(session, data) {
+    const screen = session.screen;
+    let i = 0;
+
+    while (i < data.length) {
+      const ch = data[i];
+
+      if (ch === '\x1b') {
+        i = this.consumeEscape(data, i, screen);
+        continue;
+      }
+
+      if (ch === '\r') {
+        screen.cursorCol = 0;
+      } else if (ch === '\n') {
+        this.newLine(screen);
+      } else if (ch === '\b') {
+        screen.cursorCol = Math.max(0, screen.cursorCol - 1);
+      } else if (ch === '\t') {
+        screen.cursorCol = Math.min(screen.cols - 1, screen.cursorCol + (8 - (screen.cursorCol % 8)));
+      } else if (ch >= ' ') {
+        this.writeChar(screen, ch);
+      }
+
+      i += 1;
+    }
+  }
+
+  consumeEscape(data, start, screen) {
+    const next = data[start + 1];
+    if (!next) return start + 1;
+
+    if (next === ']') {
+      let i = start + 2;
+      while (i < data.length) {
+        if (data[i] === '\x07') return i + 1;
+        if (data[i] === '\x1b' && data[i + 1] === '\\') return i + 2;
+        i += 1;
+      }
+      return data.length;
+    }
+
+    if (next === '[') {
+      let i = start + 2;
+      while (i < data.length && !/[A-Za-z~]/.test(data[i])) {
+        i += 1;
+      }
+      if (i >= data.length) return data.length;
+      this.applyCsi(screen, data.substring(start + 2, i), data[i]);
+      return i + 1;
+    }
+
+    return start + 2;
+  }
+
+  applyCsi(screen, rawParams, final) {
+    const privateMode = rawParams.startsWith('?') || rawParams.startsWith('>');
+    const cleanParams = rawParams.replace(/[?>]/g, '');
+    const params = cleanParams.length
+      ? cleanParams.split(';').map(value => parseInt(value, 10) || 0)
+      : [];
+    const first = params[0] || 1;
+
+    if (privateMode && final !== 'J' && final !== 'K') return;
+
+    if (final === 'A') {
+      screen.cursorRow = Math.max(0, screen.cursorRow - first);
+    } else if (final === 'B') {
+      screen.cursorRow = Math.min(screen.rows - 1, screen.cursorRow + first);
+    } else if (final === 'C') {
+      screen.cursorCol = Math.min(screen.cols - 1, screen.cursorCol + first);
+    } else if (final === 'D') {
+      screen.cursorCol = Math.max(0, screen.cursorCol - first);
+    } else if (final === 'G') {
+      screen.cursorCol = Math.max(0, Math.min(screen.cols - 1, first - 1));
+    } else if (final === 'H' || final === 'f') {
+      screen.cursorRow = Math.max(0, Math.min(screen.rows - 1, (params[0] || 1) - 1));
+      screen.cursorCol = Math.max(0, Math.min(screen.cols - 1, (params[1] || 1) - 1));
+    } else if (final === 'J') {
+      this.clearScreen(screen, params[0] || 0);
+    } else if (final === 'K') {
+      this.clearLine(screen, params[0] || 0);
+    }
+  }
+
+  writeChar(screen, ch) {
+    const line = screen.lines[screen.cursorRow] || '';
+    const padded = line.padEnd(screen.cursorCol, ' ');
+    screen.lines[screen.cursorRow] = (padded.substring(0, screen.cursorCol) + ch + padded.substring(screen.cursorCol + 1)).substring(0, screen.cols);
+    screen.cursorCol += 1;
+    if (screen.cursorCol >= screen.cols) {
+      screen.cursorCol = 0;
+      this.newLine(screen);
+    }
+  }
+
+  newLine(screen) {
+    if (screen.cursorRow >= screen.rows - 1) {
+      screen.lines.shift();
+      screen.lines.push('');
+    } else {
+      screen.cursorRow += 1;
+    }
+  }
+
+  clearScreen(screen, mode) {
+    if (mode === 2 || mode === 3) {
+      screen.lines = Array.from({ length: screen.rows }, () => '');
+      screen.cursorRow = 0;
+      screen.cursorCol = 0;
+    } else if (mode === 0) {
+      screen.lines[screen.cursorRow] = (screen.lines[screen.cursorRow] || '').substring(0, screen.cursorCol);
+      for (let row = screen.cursorRow + 1; row < screen.rows; row++) {
+        screen.lines[row] = '';
+      }
+    } else if (mode === 1) {
+      for (let row = 0; row < screen.cursorRow; row++) {
+        screen.lines[row] = '';
+      }
+      screen.lines[screen.cursorRow] = (screen.lines[screen.cursorRow] || '').substring(screen.cursorCol);
+    }
+  }
+
+  clearLine(screen, mode) {
+    const line = screen.lines[screen.cursorRow] || '';
+    if (mode === 2) {
+      screen.lines[screen.cursorRow] = '';
+    } else if (mode === 1) {
+      screen.lines[screen.cursorRow] = line.substring(screen.cursorCol);
+    } else {
+      screen.lines[screen.cursorRow] = line.substring(0, screen.cursorCol);
+    }
+  }
+
+  renderScreen(screen) {
+    const lines = screen.lines.map(line => line.replace(/\s+$/g, ''));
+    while (lines.length > 0 && lines[0] === '') lines.shift();
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
+    let rendered = lines.join('\n').replace(/```/g, '` ` `').trim();
+    while (rendered.length > 1800 && lines.length > 1) {
+      lines.shift();
+      rendered = lines.join('\n').replace(/```/g, '` ` `').trim();
+    }
+    return rendered;
   }
 
   splitIntoPages(content) {
     const pages = [];
     const limit = 1900;
-    let remaining = content;
+    // Strip trailing/leading whitespace and empty lines for cleaner Discord look
+    let remaining = content.trim();
+
+    if (!remaining) return [];
 
     while (remaining.length > 0) {
       if (remaining.length <= limit) {
         pages.push(remaining);
         break;
       }
-      pages.push(remaining.substring(0, limit));
-      remaining = remaining.substring(limit);
+
+      // Try to split at a newline to avoid cutting in the middle of an ANSI code
+      let splitIdx = remaining.lastIndexOf('\n', limit);
+      if (splitIdx <= 0) splitIdx = limit;
+
+      pages.push(remaining.substring(0, splitIdx));
+      remaining = remaining.substring(splitIdx).trim();
     }
     return pages;
   }
