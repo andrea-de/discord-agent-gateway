@@ -705,36 +705,13 @@ async function handleUsageCommand(interaction) {
       return interaction.editReply(`❌ **Failed to retrieve provider usage details:** ${err.message}`);
     }
   } else {
-    let overviewText = `### 📊 Global Token Usage Overview\n`;
-    overviewText += `* **Total Tokens Consumed:** \`${globalTokens.toLocaleString()} tokens\`\n`;
-    overviewText += `  * *Antigravity CLI (agy):* \`${toolTotals.agy.toLocaleString()} tokens\`\n`;
-    overviewText += `  * *Gemini CLI (gemini):* \`${toolTotals.gemini.toLocaleString()} tokens\`\n`;
-    overviewText += `  * *Codex CLI (codex):* \`${toolTotals.codex.toLocaleString()} tokens\`\n\n`;
-
-    overviewText += `**Active Sessions Usage Breakdown:**\n`;
-    if (threadTotalsMap.size === 0) {
-      overviewText += `* *No logged session usage found in registry.*\n\n`;
-    } else {
-      for (const [id, stats] of threadTotalsMap.entries()) {
-        const threadMeta = threadMetadata.get(id);
-        const toolDisplay = stats.tool === 'agy' ? 'antigravity' : stats.tool;
-        const name = threadMeta ? `[${toolDisplay.toUpperCase()}] ${threadMeta.directory.split('/').pop()}` : `Thread #${id}`;
-        overviewText += `* **Channel <#${id}> (${name}):** \`${stats.tokens.toLocaleString()} tokens\`\n`;
-      }
-      overviewText += `\n`;
-    }
-
     try {
       const quotaService = require('../utils/quotaService');
       const liveQuotaReport = await quotaService.getLiveQuotaReport();
-      overviewText += liveQuotaReport;
+      return interaction.editReply(liveQuotaReport);
     } catch (err) {
-      overviewText += `*Failed to query live Google API quotas: ${err.message}*`;
+      return interaction.editReply(`❌ **Failed to retrieve live Google API quotas:** ${err.message}`);
     }
-
-    overviewText += `\n*Tip: Run \`/usage\` inside a specific project thread to view detailed model quotas and rate limits.*`;
-
-    return interaction.editReply(overviewText);
   }
 }
 
