@@ -50,6 +50,10 @@ async function handleInteraction(interaction) {
       await commandHandlers.handleDeleteCommand(interaction);
     } else if (commandName === 'kill') {
       await commandHandlers.handleKillCommand(interaction);
+    } else if (commandName === 'stop') {
+      await commandHandlers.handleStopCommand(interaction);
+    } else if (commandName === 'archive-thread') {
+      await commandHandlers.handleArchiveThreadCommand(interaction);
     } else if (commandName === 'info') {
       await commandHandlers.handleInfoCommand(interaction);
     } else if (commandName === 'restart') {
@@ -70,6 +74,8 @@ async function handleInteraction(interaction) {
       await buttonHandlers.handleSessionButton(interaction);
     } else if (customId.startsWith('gateway:')) {
       await buttonHandlers.handleGatewayButton(interaction);
+    } else if (customId.startsWith('process:')) {
+      await buttonHandlers.handleProcessButton(interaction);
     }
   }
 

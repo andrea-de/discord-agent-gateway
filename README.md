@@ -9,15 +9,39 @@ Instead of emulating a raw terminal interface, the gateway wraps executions into
 ## 📂 Project Structure
 
 ```text
-discord-agentic/
+discord-agent-gateway/
 ├── src/
-│   ├── gateway.js          # Main entrypoint, handles Discord event listeners & client routers
-│   ├── processManager.js   # Spawns CLI sub-processes, manages inputs/outputs & log buffering
-│   ├── parser.js           # Sanitizes logs & detects interactive prompts/choices
-│   └── commands.js         # Defines and registers Discord Slash Commands
-├── .env.example            # Configuration template for Discord bot authorization keys
-├── package.json            # Node project configuration & dependencies (discord.js, dotenv)
-└── README.md               # Setup & deployment guide
+│   ├── gateway.js            # Main entrypoint, initializes Discord client & handles basic event listeners
+│   ├── commands.js           # Defines and registers Discord Slash Commands configuration
+│   ├── parser.js             # Parses streaming CLI stdout to extract token usage, subagent status, and interactive choices
+│   ├── processManager.js     # Manages standard spawned CLI subprocess execution, I/O streams, and log buffering
+│   ├── ptyManager.js         # Manages interactive pseudo-terminal (PTY) sessions using node-pty
+│   │
+│   ├── drivers/              # Provider/tool-specific drivers (Google agy/gemini, OpenAI codex)
+│   │   ├── index.js          # Driver registry and resolver
+│   │   ├── agyDriver.js      # Handles Antigravity-specific execution parser logic and formatting
+│   │   ├── codexDriver.js    # Handles Codex-specific execution parser logic and formatting
+│   │   └── geminiDriver.js   # Handles Gemini-specific execution parser logic and formatting
+│   │
+│   ├── handlers/             # Discord interaction handlers
+│   │   ├── commandHandlers.js # Handles Slash commands (/antigravity, /codex, /info, /usage, etc.)
+│   │   ├── buttonHandlers.js  # Handles Discord button clicks (starting tools, cleaning channels, README, etc.)
+│   │   ├── modalHandlers.js   # Handles Discord form modal submissions (e.g. custom inputs)
+│   │   └── interactionRouter.js # Routes incoming commands, buttons, and modals to correct handlers
+│   │
+│   ├── services/             # Core business logic and shared application services
+│   │   ├── projectService.js  # Resolves workspace directories, auto-provisions project channels & manages project dashboards
+│   │   ├── statusUiService.js # Updates persistent global gateway info, projects list, and sessions history messages
+│   │   └── restartService.js  # Coordinates pulling latest changes from git and hot-restarting the gateway
+│   │
+│   └── utils/                # Utility modules and helpers
+│       ├── constants.js       # Predefined Button/Modal Custom IDs and emoji configuration
+│       ├── state.js           # In-memory reactive state manager (persists active threads & metadata)
+│       └── quotaService.js    # Pulls Google/OpenAI API quota statistics and formats usage reports
+│
+├── .env.example              # Configuration template for Discord bot authorization keys & directories
+├── package.json              # Node project configuration & dependencies (discord.js, dotenv, node-pty)
+└── README.md                 # Setup, configuration, and architecture guide
 ```
 
 ---
@@ -66,7 +90,7 @@ To run this gateway on your local machine, you need to create and authorize a Di
 
 1. **Clone/Navigate to this folder:**
    ```bash
-   cd /home/andy/Projects/discord-agentic
+   cd discord-agent-gateway
    ```
 
 2. **Install Node.js dependencies:**
@@ -138,7 +162,27 @@ When a task starts, the bot generates a dynamic Discord thread (named like `[ant
 * `/model [name]`: Gets or sets the LLM model for the thread. If a model name is provided, updates the thread configuration for subsequent resumption/continuation runs.
 * `/usage`: Displays overall token usage for the current billing cycle, remaining quota balance, cycle reset date, and individual tool usage breakdown.
 * `/export`: Saves a Markdown transcription of the thread history into your local project workspace.
-* `/kill`: Terminates the running process (`SIGTERM` -> `SIGKILL`) and archives the thread.
+* `/stop`: Terminates only the active headless agent process/request for the thread, leaving the thread open for discussion or resumption.
+* `/archive-thread` / `/kill`: Terminates any active process and locks/archives the Discord thread.
+* `/info`: Refreshes/recreates the channel's project dashboard, including the list of active sessions (threads).
+* `/restart`: Coordinates pulling latest changes from git and hot-restarting the gateway.
+
+---
+
+### 4. Interactive Dashboard Buttons
+Every project channel hosts a pinned **Project Dashboard** containing control buttons:
+* **🤖 Antigravity / ♊ Gemini / 🧠 Codex / 📟 Terminal**: Launches a new session/thread in the project directory using the chosen tool.
+* **📂 History**: Pulls and lists the latest historical sessions/threads.
+* **📖 README / 📁 Files / 🌿 Git**: Displays the project's README file, directory layout, or `git status` ephemerally.
+* **🧹 Clean**: Clears channel messages, reprints the dashboard, and runs log cleanup.
+
+---
+
+### 5. Automated Log Management & Cleanup
+To prevent project workspaces from being cluttered by log files:
+* **Thread-Scoped Logs**: Log files are generated inside your project directories using the format `.gateway-${tool}-${threadId}-${Date.now()}.log`, associating each execution directly with its Discord thread.
+* **Automatic Deletion**: When you delete a developer thread inside Discord, the gateway intercepts the event, terminates any running process/PTY session, clears metadata, and **immediately deletes** all associated `.log` files from the project directory.
+* **Manual Orphan Cleanup (Clean Button)**: Clicking the `Clean` (`🧹`) button on the project dashboard fetches all open threads (active and archived) and **deletes all orphaned logs** (old log formats or logs belonging to deleted threads) while safely keeping logs of active threads and processes.
 
 ---
 

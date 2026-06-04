@@ -80,7 +80,7 @@ class PtyManager extends EventEmitter {
       flushTimer: null,
       displayMessage: null,
       sentMessages: [],
-      fullLogFile: path.join(directory, `.gateway-pty-${tool}-${Date.now()}.log`)
+      fullLogFile: path.join(directory, `.gateway-pty-${tool}-${threadId}-${Date.now()}.log`)
     };
 
     this.activeSessions.set(threadId, sessionContext);

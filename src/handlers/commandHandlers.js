@@ -4,7 +4,7 @@ const { ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle 
 const processManager = require('../processManager');
 const ptyManager = require('../ptyManager');
 const { currentGateway, threadMetadata, saveMetadata } = require('../utils/state');
-const { resolveGatewayAndProject, resolveProjectDirectory, getOrCreateProjectChannel } = require('../services/projectService');
+const { resolveGatewayAndProject, resolveProjectDirectory, getOrCreateProjectChannel, getDashboardComponents, updateProjectDashboard, sendProjectDashboard } = require('../services/projectService');
 const { performGitPullAndRestart } = require('../services/restartService');
 const { updateSessionsList } = require('../services/statusUiService');
 const { CUSTOM_IDS } = require('../utils/constants');
@@ -266,8 +266,12 @@ async function handleStatusCommand(interaction) {
         }
 
         if (fs.existsSync(resolvedDir) && fs.statSync(resolvedDir).isDirectory()) {
-          const files = fs.readdirSync(resolvedDir)
-            .filter(f => f.startsWith(`.gateway-${meta.tool}-`) && f.endsWith('.log'));
+          let files = fs.readdirSync(resolvedDir)
+            .filter(f => f.startsWith(`.gateway-${meta.tool}-${threadId}-`) && f.endsWith('.log'));
+          if (files.length === 0) {
+            files = fs.readdirSync(resolvedDir)
+              .filter(f => f.startsWith(`.gateway-${meta.tool}-`) && f.endsWith('.log'));
+          }
 
           if (files.length > 0) {
             files.sort((a, b) => b.localeCompare(a));
@@ -736,62 +740,83 @@ async function handleInfoCommand(interaction) {
     });
   }
 
-  const embed = new EmbedBuilder()
-    .setTitle(`📁 Project Dashboard: ${inferredProject}`)
-    .setDescription(`Use the buttons below to interactively fetch information about this project. Responses are sent **ephemerally** to prevent channel clutter.`)
-    .setColor('#2b2d31')
-    .addFields(
-      { name: 'Gateway', value: `\`${gateway || 'Default'}\``, inline: true },
-      { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true }
-    );
+  await interaction.deferReply({ ephemeral: true });
 
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
-      .setLabel('Antigravity')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('🤖'),
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
-      .setLabel('Gemini')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('♊'),
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
-      .setLabel('Codex')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('🧠'),
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
-      .setLabel('Terminal')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('📟')
-  );
+  try {
+    const updated = await updateProjectDashboard(channel);
+    if (updated) {
+      await interaction.editReply({ content: '📊 **Project dashboard updated with active sessions!**' });
+    } else {
+      // Re-create the project dashboard if it wasn't found
+      await sendProjectDashboard(channel, resolvedDirectory);
+      await interaction.editReply({ content: '📊 **Project dashboard recreated and updated with active sessions!**' });
+    }
+  } catch (err) {
+    console.error('Failed to handle /info command:', err);
+    await interaction.editReply({ content: `❌ **Failed to update dashboard:** ${err.message}` });
+  }
+}
 
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
-      .setLabel('History')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('📂'),
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
-      .setLabel('README')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('📖'),
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
-      .setLabel('Files')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('📁'),
-    new ButtonBuilder()
-      .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
-      .setLabel('Git')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('🌿')
-  );
+async function handleStopCommand(interaction) {
+  const threadId = interaction.channelId;
+  const task = processManager.activeTasks.get(threadId);
 
-  return interaction.reply({ embeds: [embed], components: [row1, row2] });
+  if (!task) {
+    return interaction.reply({
+      content: '❌ No active agent task found in this thread.',
+      ephemeral: true
+    });
+  }
+
+  await interaction.reply({ content: '🛑 **Stopping active headless agent execution...**' });
+
+  const success = await processManager.killTask(threadId, { archiveThread: false });
+  if (!success) {
+    await interaction.followUp({
+      content: '❌ Failed to stop agent execution.',
+      ephemeral: true
+    });
+  }
+}
+
+async function handleArchiveThreadCommand(interaction) {
+  const threadId = interaction.channelId;
+  const task = processManager.activeTasks.get(threadId);
+  const ptySession = ptyManager.activeSessions.get(threadId);
+
+  if (!task && !ptySession) {
+    return interaction.reply({
+      content: '❌ No active agent task or terminal session found in this thread.',
+      ephemeral: true
+    });
+  }
+
+  await interaction.reply('🛑 **Terminating active processes and archiving thread...**');
+
+  let success = false;
+  if (task) {
+    success = await processManager.killTask(threadId, { archiveThread: true });
+  } else if (ptySession) {
+    // For PTY interactive terminals
+    success = await ptyManager.killSession(threadId);
+    if (success) {
+      try {
+        const thread = interaction.channel;
+        if (thread && thread.isThread()) {
+          await thread.edit({ archived: true, locked: true });
+        }
+      } catch (err) {
+        console.error('Failed to archive PTY thread:', err);
+      }
+    }
+  }
+
+  if (!success) {
+    await interaction.followUp({
+      content: '❌ Failed to terminate process or archive thread.',
+      ephemeral: true
+    });
+  }
 }
 
 module.exports = {
@@ -808,4 +833,6 @@ module.exports = {
   handleTerminalCommand,
   handleUsageCommand,
   handleInfoCommand,
+  handleStopCommand,
+  handleArchiveThreadCommand,
 };

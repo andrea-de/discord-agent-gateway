@@ -125,7 +125,7 @@ class ProcessManager extends EventEmitter {
       exitCode: null,
       inactivityTimer: null,
       flushTimer: null,
-      fullLogFile: path.join(directory, `.gateway-${tool}-${Date.now()}.log`)
+      fullLogFile: path.join(directory, `.gateway-${tool}-${threadId}-${Date.now()}.log`)
     };
 
     this.activeTasks.set(threadId, taskContext);
@@ -559,8 +559,47 @@ Time: ${taskContext.startTime.toISOString()}
 
     if (code === 0) {
       closingMsg = `✅ **Agent execution completed successfully!**\n* **Duration:** ${durationStr}\n* **Log File:** \`${task.fullLogFile}\``;
+      
+      // Clear lockout topic on success if it was previously set to LOCKED OUT
+      if (task.thread.parent && typeof task.thread.parent.setTopic === 'function') {
+        try {
+          const topic = task.thread.parent.topic;
+          if (topic && topic.includes('LOCKED OUT')) {
+            await task.thread.parent.setTopic(`🟢 Active Project Workspace.`);
+          }
+        } catch (topicErr) {}
+      }
     } else {
       closingMsg = `❌ **Agent execution failed!**\n* **Exit Code:** ${code}\n* **Signal:** ${signal || 'none'}\n* **Duration:** ${durationStr}\n* **Log File:** \`${task.fullLogFile}\``;
+      
+      // Catch individual quota exhaustion / RESOURCE_EXHAUSTED / 429 error logs
+      if (task.processStdoutAccumulator) {
+        const output = task.processStdoutAccumulator;
+        const hasQuotaError = output.includes('Individual quota reached') || 
+                              output.includes('RESOURCE_EXHAUSTED') || 
+                              output.includes('Quota exceeded') ||
+                              output.includes('429');
+        
+        if (hasQuotaError) {
+          const resetMatch = output.match(/Resets in\s*([0-9a-zA-Z\s]+)/i) || 
+                             output.match(/reset[^\n]*in\s*([0-9a-zA-Z\s]+)/i);
+          const resetsIn = resetMatch ? resetMatch[1].trim() : 'unknown duration';
+          const toolDisplay = (task.tool === 'agy' ? 'antigravity' : task.tool).toUpperCase();
+          
+          const quotaWarning = `⚠️ **Lockout Warning:** Individual usage/turn quota limit has been exhausted (code 429).\n* **Tool:** ${toolDisplay}\n* **Status:** **LOCKED OUT**\n* **Estimated Reset:** Resets in \`${resetsIn}\`\n\n*Note: This is your client-level / Google One IDE chat entitlement limit. While this limit is active, the underlying agent CLI will be locked out and reject all incoming prompts.*`;
+          
+          closingMsg = `${quotaWarning}\n\n${closingMsg}`;
+          
+          // Attempt to update parent channel topic to make the lockout visible at first glance
+          if (task.thread.parent && typeof task.thread.parent.setTopic === 'function') {
+            try {
+              await task.thread.parent.setTopic(`⚠️ LOCKED OUT: Quota reached for ${toolDisplay}. Resets in ${resetsIn}`);
+            } catch (topicErr) {
+              console.warn(`Could not update channel topic for #${task.thread.parent.name}:`, topicErr.message);
+            }
+          }
+        }
+      }
     }
 
     try {

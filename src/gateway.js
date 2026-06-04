@@ -299,10 +299,12 @@ client.on('threadCreate', async (thread) => {
 // Clean up metadata and update dashboard when a thread is deleted
 client.on('threadDelete', async (thread) => {
   const threadId = thread.id;
+  let activeLogPath = null;
 
   // Kill active agent task if any
   const task = processManager.activeTasks.get(threadId);
   if (task) {
+    if (task.fullLogFile) activeLogPath = task.fullLogFile;
     try {
       console.log(`[Thread Delete] Killing active task for deleted thread ${threadId}`);
       await processManager.killTask(threadId);
@@ -314,11 +316,52 @@ client.on('threadDelete', async (thread) => {
   // Kill active PTY session if any
   const ptySession = ptyManager.activeSessions.get(threadId);
   if (ptySession) {
+    if (ptySession.fullLogFile) activeLogPath = ptySession.fullLogFile;
     try {
       console.log(`[Thread Delete] Killing active PTY session for deleted thread ${threadId}`);
       await ptyManager.killSession(threadId);
     } catch (e) {
       console.error(`Failed to kill PTY session on thread deletion:`, e);
+    }
+  }
+
+  // Clean up any log files associated with this thread
+  const meta = threadMetadata.get(threadId);
+  const directory = meta ? meta.directory : (task ? task.directory : (ptySession ? ptySession.directory : null));
+
+  if (directory) {
+    try {
+      const os = require('os');
+      let resolvedDir = directory;
+      if (resolvedDir.startsWith('~')) {
+        resolvedDir = path.join(os.homedir(), resolvedDir.substring(1));
+      }
+
+      if (fs.existsSync(resolvedDir) && fs.statSync(resolvedDir).isDirectory()) {
+        const files = fs.readdirSync(resolvedDir);
+        for (const file of files) {
+          if (file.includes(`-${threadId}-`) && file.endsWith('.log')) {
+            try {
+              fs.unlinkSync(path.join(resolvedDir, file));
+              console.log(`[Thread Delete] Cleaned up log file: ${file}`);
+            } catch (err) {
+              console.error(`[Thread Delete] Failed to delete log file ${file}:`, err.message);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Thread Delete] Error scanning directory for logs:', err);
+    }
+  }
+
+  // Fallback delete of activeLogPath
+  if (activeLogPath && fs.existsSync(activeLogPath)) {
+    try {
+      fs.unlinkSync(activeLogPath);
+      console.log(`[Thread Delete] Deleted active log file: ${activeLogPath}`);
+    } catch (e) {
+      console.error(`[Thread Delete] Failed to delete active log file ${activeLogPath}:`, e.message);
     }
   }
 

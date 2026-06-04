@@ -279,69 +279,7 @@ async function getOrCreateProjectChannel(guild, resolvedDirectory) {
   return { targetChannel, permissionWarning };
 }
 
-async function updateProjectDashboard(channel) {
-  try {
-    const messages = await channel.messages.fetch({ limit: 20 });
-    const client = channel.client;
-    const dashboardMsg = messages.find(m => 
-      m.author.id === client.user.id && 
-      m.embeds[0] && 
-      m.embeds[0].title && 
-      m.embeds[0].title.startsWith('📁 Project Dashboard:')
-    );
-
-    if (!dashboardMsg) return;
-
-    // Fetch active threads in the channel
-    const fetched = await channel.threads.fetchActive();
-    const threads = Array.from(fetched.threads.values());
-
-    // Generate active threads section
-    let threadsValue = '*No active sessions.*';
-    if (threads.length > 0) {
-      threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
-    }
-
-    // Clone the existing embed to avoid mutating read-only structures
-    const oldEmbed = dashboardMsg.embeds[0];
-    const newEmbed = EmbedBuilder.from(oldEmbed);
-
-    // Update the "Active Sessions" field or add it
-    const fields = oldEmbed.fields.filter(f => f.name !== 'Active Sessions');
-    newEmbed.setFields(fields);
-    newEmbed.addFields({ name: 'Active Sessions', value: threadsValue });
-
-    await dashboardMsg.edit({ embeds: [newEmbed] });
-  } catch (e) {
-    console.error('Failed to update project dashboard:', e);
-  }
-}
-
-async function sendProjectDashboard(channel, resolvedDirectory) {
-  const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
-  
-  // Fetch active threads in the channel
-  let threadsValue = '*No active sessions.*';
-  try {
-    const fetched = await channel.threads.fetchActive();
-    const threads = Array.from(fetched.threads.values());
-    if (threads.length > 0) {
-      threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
-    }
-  } catch (e) {
-    console.warn('Failed to fetch active threads for dashboard send:', e.message);
-  }
-
-  const embed = new EmbedBuilder()
-    .setTitle(`📁 Project Dashboard: ${projectDirName}`)
-    .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively start agent sessions or query project info.`)
-    .setColor('#2b2d31')
-    .addFields(
-      { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
-      { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true },
-      { name: 'Active Sessions', value: threadsValue }
-    );
-
+function getDashboardComponents() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
@@ -393,7 +331,75 @@ async function sendProjectDashboard(channel, resolvedDirectory) {
       .setEmoji('🧹')
   );
 
-  return channel.send({ embeds: [embed], components: [row1, row2] });
+  return [row1, row2];
+}
+
+async function updateProjectDashboard(channel) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 20 });
+    const client = channel.client;
+    const dashboardMsg = messages.find(m => 
+      m.author.id === client.user.id && 
+      m.embeds[0] && 
+      m.embeds[0].title && 
+      m.embeds[0].title.startsWith('📁 Project Dashboard:')
+    );
+
+    if (!dashboardMsg) return false;
+
+    // Fetch active threads in the channel
+    const fetched = await channel.threads.fetchActive();
+    const threads = Array.from(fetched.threads.values());
+
+    // Generate active threads section
+    let threadsValue = '*No active sessions.*';
+    if (threads.length > 0) {
+      threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
+    }
+
+    // Clone the existing embed to avoid mutating read-only structures
+    const oldEmbed = dashboardMsg.embeds[0];
+    const newEmbed = EmbedBuilder.from(oldEmbed);
+
+    // Update the "Active Sessions" field or add it
+    const fields = oldEmbed.fields.filter(f => f.name !== 'Active Sessions');
+    newEmbed.setFields(fields);
+    newEmbed.addFields({ name: 'Active Sessions', value: threadsValue });
+
+    await dashboardMsg.edit({ embeds: [newEmbed], components: getDashboardComponents() });
+    return true;
+  } catch (e) {
+    console.error('Failed to update project dashboard:', e);
+    return false;
+  }
+}
+
+async function sendProjectDashboard(channel, resolvedDirectory) {
+  const projectDirName = resolvedDirectory.split(/[/\\]/).filter(Boolean).pop() || 'general';
+  
+  // Fetch active threads in the channel
+  let threadsValue = '*No active sessions.*';
+  try {
+    const fetched = await channel.threads.fetchActive();
+    const threads = Array.from(fetched.threads.values());
+    if (threads.length > 0) {
+      threadsValue = threads.map(t => `• <#${t.id}>`).join('\n');
+    }
+  } catch (e) {
+    console.warn('Failed to fetch active threads for dashboard send:', e.message);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📁 Project Dashboard: ${projectDirName}`)
+    .setDescription(`Welcome to the Project Channel for **${projectDirName}**!\nAll agent tasks run inside this directory will be spawned as threads here.\n\nUse the buttons below to interactively start agent sessions or query project info.`)
+    .setColor('#2b2d31')
+    .addFields(
+      { name: 'Gateway', value: `\`${currentGateway}\``, inline: true },
+      { name: 'Directory', value: `\`${resolvedDirectory}\``, inline: true },
+      { name: 'Active Sessions', value: threadsValue }
+    );
+
+  return channel.send({ embeds: [embed], components: getDashboardComponents() });
 }
 
 async function updateAllProjectDashboards(guild) {
@@ -435,59 +441,7 @@ async function updateAllProjectDashboards(guild) {
           newEmbed.setFields(fields);
           newEmbed.addFields({ name: 'Active Sessions', value: threadsValue });
 
-          // Update components to Row 1 and Row 2 with Clean button
-          const row1 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'antigravity'))
-              .setLabel('Antigravity')
-              .setStyle(ButtonStyle.Primary)
-              .setEmoji('🤖'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'gemini'))
-              .setLabel('Gemini')
-              .setStyle(ButtonStyle.Primary)
-              .setEmoji('♊'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'codex'))
-              .setLabel('Codex')
-              .setStyle(ButtonStyle.Primary)
-              .setEmoji('🧠'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.START_TOOL(currentGateway, 'terminal'))
-              .setLabel('Terminal')
-              .setStyle(ButtonStyle.Primary)
-              .setEmoji('📟')
-          );
-
-          const row2 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.HISTORY(currentGateway))
-              .setLabel('History')
-              .setStyle(ButtonStyle.Secondary)
-              .setEmoji('📂'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.README(currentGateway))
-              .setLabel('README')
-              .setStyle(ButtonStyle.Secondary)
-              .setEmoji('📖'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.FILES(currentGateway))
-              .setLabel('Files')
-              .setStyle(ButtonStyle.Secondary)
-              .setEmoji('📁'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.GIT(currentGateway))
-              .setLabel('Git')
-              .setStyle(ButtonStyle.Secondary)
-              .setEmoji('🌿'),
-            new ButtonBuilder()
-              .setCustomId(CUSTOM_IDS.PROJECT.CLEAN(currentGateway))
-              .setLabel('Clean')
-              .setStyle(ButtonStyle.Danger)
-              .setEmoji('🧹')
-          );
-
-          await dashboardMsg.edit({ embeds: [newEmbed], components: [row1, row2] });
+          await dashboardMsg.edit({ embeds: [newEmbed], components: getDashboardComponents() });
         }
       } catch (err) {
         console.warn(`Failed to update dashboard for channel ${channel.name}:`, err.message);
@@ -508,4 +462,5 @@ module.exports = {
   updateProjectDashboard,
   sendProjectDashboard,
   updateAllProjectDashboards,
+  getDashboardComponents,
 };

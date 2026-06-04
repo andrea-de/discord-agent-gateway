@@ -215,10 +215,61 @@ async function handleProjectButton(interaction) {
           } catch (e) {}
         }
 
+        // Clean up orphaned log files in the project directory
+        let deletedLogsCount = 0;
+        try {
+          const activeFetched = await channel.threads.fetchActive();
+          const archivedFetched = await channel.threads.fetchArchived();
+          const openThreadIds = new Set([
+            ...activeFetched.threads.keys(),
+            ...archivedFetched.threads.keys()
+          ]);
+
+          const activeLogFiles = new Set();
+          for (const task of processManager.activeTasks.values()) {
+            if (task.fullLogFile) activeLogFiles.add(path.resolve(task.fullLogFile));
+          }
+          for (const session of ptyManager.activeSessions.values()) {
+            if (session.fullLogFile) activeLogFiles.add(path.resolve(session.fullLogFile));
+          }
+
+          if (fs.existsSync(resolvedDirectory)) {
+            const files = fs.readdirSync(resolvedDirectory);
+            const filenameRegex = /^\.gateway(?:-pty)?-(?:agy|codex|gemini|bash)-(?:(\d{17,22})-)?(\d+)\.log$/;
+
+            for (const file of files) {
+              const fullPath = path.join(resolvedDirectory, file);
+              const resolvedPath = path.resolve(fullPath);
+
+              if (activeLogFiles.has(resolvedPath)) {
+                continue;
+              }
+
+              const match = file.match(filenameRegex);
+              if (match) {
+                const threadId = match[1];
+                if (!threadId || !openThreadIds.has(threadId)) {
+                  try {
+                    fs.unlinkSync(fullPath);
+                    deletedLogsCount++;
+                  } catch (err) {
+                    console.error(`Failed to delete orphaned log file ${file}:`, err.message);
+                  }
+                }
+              }
+            }
+          }
+        } catch (threadErr) {
+          console.error('Failed to clean up orphaned log files:', threadErr);
+        }
+
         // Reprint the dashboard
         await sendProjectDashboard(channel, resolvedDirectory);
 
-        await interaction.editReply({ content: '🧹 Parent channel messages cleared and dashboard reprinted successfully.' });
+        const logMsg = deletedLogsCount > 0 
+          ? ` and deleted ${deletedLogsCount} orphaned log files` 
+          : '';
+        await interaction.editReply({ content: `🧹 Parent channel messages cleared${logMsg} and dashboard reprinted successfully.` });
       } catch (err) {
         console.error('Failed to clean channel messages:', err);
         await interaction.editReply({ content: `❌ Failed to clean channel: ${err.message}` });
@@ -437,10 +488,41 @@ async function handleGatewayButton(interaction) {
   }
 }
 
+async function handleProcessButton(interaction) {
+  const customId = interaction.customId;
+  const parts = customId.split(':');
+  
+  // Custom ID format: process:${action}:${threadId}
+  const action = parts[1];
+  const threadId = parts[2];
+
+  if (action === 'stop') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      console.warn('Failed to defer reply for process stop:', e.message);
+      return;
+    }
+    
+    const task = processManager.activeTasks.get(threadId);
+    if (!task) {
+      return interaction.editReply({ content: '❌ No active agent task found for this thread.' });
+    }
+
+    const success = await processManager.killTask(threadId, { archiveThread: false });
+    if (success) {
+      await interaction.editReply({ content: '🛑 **Headless agent execution stopped successfully.**' });
+    } else {
+      await interaction.editReply({ content: '❌ Failed to stop the agent execution.' });
+    }
+  }
+}
+
 module.exports = {
   handleChoiceButton,
   handleThreadButton,
   handleProjectButton,
   handleSessionButton,
   handleGatewayButton,
+  handleProcessButton,
 };
