@@ -611,6 +611,47 @@ async function handleThreadControlButton(interaction) {
       content: '🔗 **Select a session to bind/attach to this thread:**',
       components: [row]
     });
+  } else if (action === 'change-model') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      return;
+    }
+    const meta = getOrInferMetadata(interaction.channel);
+    if (!meta) {
+      return interaction.editReply({ content: '❌ Session metadata not found.' });
+    }
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(meta.tool);
+    
+    let models = [];
+    if (driver && typeof driver.getAvailableModels === 'function') {
+      models = driver.getAvailableModels();
+    }
+    
+    if (models.length === 0) {
+      return interaction.editReply({
+        content: `❌ **No available models found** for tool \`${meta.tool.toUpperCase()}\`.`
+      });
+    }
+    
+    const { StringSelectMenuBuilder } = require('discord.js');
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`thread-control-select:change-model:${threadId}`)
+      .setPlaceholder('Select a model...')
+      .addOptions([
+        { label: 'Default Model', value: '__default__', description: 'Use the tool default model' },
+        ...models.map(m => ({
+          label: m.name.substring(0, 100),
+          value: m.value,
+          description: `Switch to ${m.name}`.substring(0, 100)
+        }))
+      ]);
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+    await interaction.editReply({
+      content: '🤖 **Select a model to use for subsequent runs in this thread:**',
+      components: [row]
+    });
   } else if (action === 'toggle-detail') {
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -685,6 +726,28 @@ async function handleThreadControlSelect(interaction) {
 
       await interaction.followUp({
         content: `✅ **Thread successfully bound/attached to session ID:** \`${selectedSessionId}\`\nResuming will now load this session's history.`,
+        ephemeral: true
+      });
+    }
+  } else if (action === 'change-model') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    const meta = getOrInferMetadata(interaction.channel);
+    if (meta) {
+      const oldModel = meta.model || 'Default';
+      const selectedModel = selectedSessionId;
+      if (selectedModel === '__default__') {
+        delete meta.model;
+      } else {
+        meta.model = selectedModel;
+      }
+      saveMetadata();
+      await updateThreadControlMessage(interaction.channel, meta);
+      
+      const newModelDisplay = selectedModel === '__default__' ? 'Default' : selectedModel;
+      await interaction.followUp({
+        content: `✅ **Model updated successfully!**\n* **Thread Model:** \`${oldModel}\` ➔ \`${newModelDisplay}\``,
         ephemeral: true
       });
     }
@@ -934,6 +997,11 @@ function getThreadControlRow(threadId, meta) {
       .setLabel(meta && meta.sessionId ? 'Change Session' : 'Attach Session')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🔗'),
+    new ButtonBuilder()
+      .setCustomId(`thread-control:change-model:${threadId}`)
+      .setLabel('Change Model')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🤖'),
     new ButtonBuilder()
       .setCustomId(`thread-control:delete:${threadId}`)
       .setLabel('Delete')

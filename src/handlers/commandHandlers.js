@@ -492,14 +492,47 @@ async function handleModelCommand(interaction) {
 
     return interaction.reply(response);
   } else {
-    const currentModel = meta.model || 'Default';
-    let response = `🤖 **Current thread model configuration:** \`${currentModel}\``;
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(meta.tool);
     
-    if (task) {
-      response += `\n* **Active running process model:** \`${task.model || 'Default'}\``;
+    let models = [];
+    if (driver && typeof driver.getAvailableModels === 'function') {
+      models = driver.getAvailableModels();
     }
     
-    return interaction.reply(response);
+    if (models.length > 0) {
+      const { StringSelectMenuBuilder, ActionRowBuilder } = require('discord.js');
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId(`thread-control-select:change-model:${threadId}`)
+        .setPlaceholder('Select a model...')
+        .addOptions([
+          { label: 'Default Model', value: '__default__', description: 'Use the tool default model' },
+          ...models.map(m => ({
+            label: m.name.substring(0, 100),
+            value: m.value,
+            description: `Switch to ${m.name}`.substring(0, 100)
+          }))
+        ]);
+      const row = new ActionRowBuilder().addComponents(selectMenu);
+      
+      const currentModel = meta.model || 'Default';
+      let content = `🤖 **Current model:** \`${currentModel}\`\nSelect a new model to use for subsequent runs in this thread:`;
+      if (task) {
+        content += `\n* **Active running process model:** \`${task.model || 'Default'}\``;
+      }
+      return interaction.reply({
+        content,
+        components: [row],
+        ephemeral: true
+      });
+    } else {
+      const currentModel = meta.model || 'Default';
+      let response = `🤖 **Current thread model configuration:** \`${currentModel}\``;
+      if (task) {
+        response += `\n* **Active running process model:** \`${task.model || 'Default'}\``;
+      }
+      return interaction.reply(response);
+    }
   }
 }
 

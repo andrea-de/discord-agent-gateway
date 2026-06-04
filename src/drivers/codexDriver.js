@@ -469,6 +469,37 @@ class CodexDriver {
     }
   }
 
+  getAvailableModels() {
+    const { execSync } = require('child_process');
+    try {
+      const output = execSync('codex debug models', { encoding: 'utf8' });
+      const data = JSON.parse(output);
+      if (data && Array.isArray(data.models)) {
+        return data.models.map(m => ({
+          name: m.display_name || m.slug,
+          value: m.slug
+        }));
+      }
+    } catch (e) {
+      console.error('Error fetching codex models:', e);
+    }
+    // Fallback to CODEX_MODEL_CHOICES
+    return [
+      { name: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
+      { name: 'GPT-5.1 Codex Max', value: 'gpt-5.1-codex-max' },
+      { name: 'GPT-5.1 Codex', value: 'gpt-5.1-codex' },
+      { name: 'GPT-5 Codex', value: 'gpt-5-codex' },
+      { name: 'GPT-5.2', value: 'gpt-5.2' },
+      { name: 'GPT-5.1', value: 'gpt-5.1' },
+      { name: 'GPT-5', value: 'gpt-5' },
+      { name: 'GPT-5 mini', value: 'gpt-5-mini' },
+      { name: 'GPT-5 nano', value: 'gpt-5-nano' },
+      { name: 'GPT-4.1', value: 'gpt-4.1' },
+      { name: 'GPT-4.1 mini', value: 'gpt-4.1-mini' },
+      { name: 'o4-mini', value: 'o4-mini' }
+    ];
+  }
+
   _parseFlags(flagsStr) {
     if (!flagsStr) return [];
     const matches = flagsStr.match(/[^\s"']+|"[^"]*"|'[^']*'/g);

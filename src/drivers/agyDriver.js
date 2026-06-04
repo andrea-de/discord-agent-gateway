@@ -334,6 +334,37 @@ class AgyDriver {
     }
   }
 
+  getAvailableModels() {
+    const { execSync } = require('child_process');
+    try {
+      const output = execSync('agy models', { encoding: 'utf8' });
+      const spinnerChars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+      const lines = output.split('\n')
+        .map(l => l.trim())
+        .filter(l => {
+          if (!l) return false;
+          if (l.includes('Fetching available models')) return false;
+          if (spinnerChars.some(char => l.startsWith(char))) return false;
+          return true;
+        });
+      
+      return lines.map(modelName => ({
+        name: modelName,
+        value: modelName
+      }));
+    } catch (e) {
+      console.error('Error fetching agy models:', e);
+      return [
+        { name: 'Gemini 3.5 Flash (Medium)', value: 'Gemini 3.5 Flash (Medium)' },
+        { name: 'Gemini 3.5 Flash (High)', value: 'Gemini 3.5 Flash (High)' },
+        { name: 'Gemini 3.5 Flash (Low)', value: 'Gemini 3.5 Flash (Low)' },
+        { name: 'Gemini 3.1 Pro (Low)', value: 'Gemini 3.1 Pro (Low)' },
+        { name: 'Gemini 3.1 Pro (High)', value: 'Gemini 3.1 Pro (High)' },
+        { name: 'Claude Sonnet 4.6 (Thinking)', value: 'Claude Sonnet 4.6 (Thinking)' }
+      ];
+    }
+  }
+
   exportSession(sessionId, directory, options = { verbose: false }) {
     const fs = require('fs');
     const path = require('path');
