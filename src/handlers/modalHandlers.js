@@ -42,10 +42,10 @@ async function handleSessionModal(interaction) {
         mode: 'review',
         prompt: prompt
       });
-      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode: 'review', hasStarted: true });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode: 'review', hasStarted: true, hideExecDetails: true });
     } else {
       await thread.send('⌨️ **Gateway Awaiting First Prompt**');
-      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode: 'review', hasStarted: false });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode: 'review', hasStarted: false, hideExecDetails: true });
     }
     saveMetadata();
 

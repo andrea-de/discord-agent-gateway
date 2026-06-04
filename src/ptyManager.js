@@ -14,13 +14,18 @@ class PtyManager extends EventEmitter {
   /**
    * Spawns a new interactive PTY session.
    */
-  async startSession({ thread, tool, directory, shell = '/bin/bash' }) {
+  async startSession({ thread, tool, directory, shell = '/bin/bash', sessionId = null }) {
     const threadId = thread.id;
     const os = require('os');
     
     // Resolve home directory
     if (directory.startsWith('~')) {
       directory = path.join(os.homedir(), directory.substring(1));
+    }
+
+    const logDir = '/tmp/discord-agent-gateway/logs';
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
     }
 
     // Prepare environment
@@ -47,13 +52,25 @@ class PtyManager extends EventEmitter {
 
     if (tool === 'gemini') {
       file = 'gemini';
-      args = []; // Just start it interactive
+      if (sessionId) {
+        args = ['--resume', sessionId];
+      } else {
+        args = [];
+      }
     } else if (tool === 'agy') {
       file = 'agy';
-      args = [];
+      if (sessionId) {
+        args = ['--conversation', sessionId];
+      } else {
+        args = [];
+      }
     } else if (tool === 'codex') {
       file = 'codex';
-      args = [];
+      if (sessionId) {
+        args = ['resume', sessionId];
+      } else {
+        args = [];
+      }
     }
 
     // Spawn the PTY
@@ -64,6 +81,15 @@ class PtyManager extends EventEmitter {
       cwd: directory,
       env: spawnEnv
     });
+
+    const { threadMetadata } = require('./utils/state');
+    const meta = threadMetadata.get(threadId);
+    const resolvedSessionId = sessionId || (meta ? meta.sessionId : null);
+    
+    const targetDir = path.join('/tmp/discord-agent-gateway/logs', tool, resolvedSessionId || threadId);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
 
     const sessionContext = {
       threadId,
@@ -80,7 +106,7 @@ class PtyManager extends EventEmitter {
       flushTimer: null,
       displayMessage: null,
       sentMessages: [],
-      fullLogFile: path.join(directory, `.gateway-pty-${tool}-${threadId}-${Date.now()}.log`)
+      fullLogFile: path.join(targetDir, `pty-${Date.now()}.log`)
     };
 
     this.activeSessions.set(threadId, sessionContext);

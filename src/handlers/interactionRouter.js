@@ -76,10 +76,24 @@ async function handleInteraction(interaction) {
       await buttonHandlers.handleGatewayButton(interaction);
     } else if (customId.startsWith('process:')) {
       await buttonHandlers.handleProcessButton(interaction);
+    } else if (customId.startsWith('thread-control:')) {
+      await buttonHandlers.handleThreadControlButton(interaction);
+    } else if (customId.startsWith('pty-ctrl:')) {
+      await buttonHandlers.handlePtyCtrlButton(interaction);
     }
   }
 
-  // 3. Modal Submissions
+  // 3. String Select Menu
+  else if (interaction.isStringSelectMenu()) {
+    const customId = interaction.customId;
+    if (customId.startsWith('thread-control-select:')) {
+      await buttonHandlers.handleThreadControlSelect(interaction);
+    } else if (customId.startsWith('pty-ctrl-select:')) {
+      await buttonHandlers.handlePtyCtrlSelect(interaction);
+    }
+  }
+
+  // 4. Modal Submissions
   else if (interaction.isModalSubmit()) {
     if (interaction.customId.startsWith('session-modal:')) {
       await modalHandlers.handleSessionModal(interaction);

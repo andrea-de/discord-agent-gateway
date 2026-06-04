@@ -3,7 +3,7 @@ const path = require('path');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const processManager = require('../processManager');
 const ptyManager = require('../ptyManager');
-const { currentGateway, threadMetadata, saveMetadata, uiState } = require('../utils/state');
+const { currentGateway, threadMetadata, saveMetadata, uiState, getOrInferMetadata } = require('../utils/state');
 const { resolveGatewayAndProject, resolveProjectDirectory, getOrCreateProjectChannel, sendProjectDashboard } = require('../services/projectService');
 const { updateSessionsList, updateGatewayInfoMessage } = require('../services/statusUiService');
 
@@ -166,19 +166,23 @@ async function handleProjectButton(interaction) {
             reason: 'Agent Gateway Direct Start'
           });
 
-          await thread.send(`### 🤖 Session Initiated via Dashboard
-* **Tool:** \`${displayToolName.toUpperCase()}\`
-* **Directory:** \`${resolvedDirectory}\`
-* **Prompt:** *Awaiting first prompt in thread...*`);
-
-          await thread.send('⌨️ **Gateway Awaiting First Prompt**');
-
-          threadMetadata.set(thread.id, {
+          const meta = {
             tool: tool === 'antigravity' ? 'agy' : (tool === 'agy' ? 'agy' : tool),
             directory: resolvedDirectory,
             mode: 'review',
             hasStarted: false
+          };
+
+          const controlRow = getThreadControlRow(thread.id, meta);
+
+          await thread.send({
+            content: `### 🤖 Session Initiated via Dashboard\n* **Tool:** \`${displayToolName.toUpperCase()}\`\n* **Directory:** \`${resolvedDirectory}\``,
+            components: controlRow
           });
+
+          await thread.send('⌨️ **Gateway Awaiting First Prompt**');
+
+          threadMetadata.set(thread.id, meta);
           saveMetadata();
 
           await interaction.editReply({ content: `✅ Session started in <#${thread.id}>` });
@@ -239,6 +243,34 @@ async function handleProjectButton(interaction) {
 
             for (const file of files) {
               const fullPath = path.join(resolvedDirectory, file);
+              const resolvedPath = path.resolve(fullPath);
+
+              if (activeLogFiles.has(resolvedPath)) {
+                continue;
+              }
+
+              const match = file.match(filenameRegex);
+              if (match) {
+                const threadId = match[1];
+                if (!threadId || !openThreadIds.has(threadId)) {
+                  try {
+                    fs.unlinkSync(fullPath);
+                    deletedLogsCount++;
+                  } catch (err) {
+                    console.error(`Failed to delete orphaned log file ${file}:`, err.message);
+                  }
+                }
+              }
+            }
+          }
+
+          const logDir = '/tmp/discord-agent-gateway/logs';
+          if (fs.existsSync(logDir)) {
+            const files = fs.readdirSync(logDir);
+            const filenameRegex = /^gateway(?:-pty)?-(?:agy|codex|gemini|bash)-(\d+)-\d+\.log$/;
+
+            for (const file of files) {
+              const fullPath = path.join(logDir, file);
               const resolvedPath = path.resolve(fullPath);
 
               if (activeLogFiles.has(resolvedPath)) {
@@ -428,7 +460,8 @@ async function handleSessionButton(interaction) {
   const targetThreadId = parts[2];
 
   if (action === 'delete') {
-    const meta = threadMetadata.get(targetThreadId);
+    const targetChannel = interaction.guild.channels.cache.get(targetThreadId) || await interaction.guild.channels.fetch(targetThreadId).catch(() => null);
+    const meta = getOrInferMetadata(targetChannel);
     if (!meta) {
       return interaction.reply({ content: '❌ Session metadata not found.', ephemeral: true });
     }
@@ -518,6 +551,472 @@ async function handleProcessButton(interaction) {
   }
 }
 
+async function handleThreadControlButton(interaction) {
+  const customId = interaction.customId;
+  const parts = customId.split(':');
+  const action = parts[1];
+  const threadId = parts[2];
+
+  if (action === 'stop') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      return;
+    }
+    const task = processManager.activeTasks.get(threadId);
+    if (!task) {
+      return interaction.editReply({ content: '❌ No active agent task found for this thread.' });
+    }
+    const success = await processManager.killTask(threadId, { archiveThread: false });
+    if (success) {
+      await interaction.editReply({ content: '🛑 **Headless agent execution stopped successfully.**' });
+    } else {
+      await interaction.editReply({ content: '❌ Failed to stop agent execution.' });
+    }
+  } else if (action === 'export' || action === 'export-clean') {
+    await handleExportControlButton(interaction, threadId, false);
+  } else if (action === 'export-all') {
+    await handleExportControlButton(interaction, threadId, true);
+  } else if (action === 'attach') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      return;
+    }
+    const meta = getOrInferMetadata(interaction.channel);
+    if (!meta) {
+      return interaction.editReply({ content: '❌ Session metadata not found.' });
+    }
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(meta.tool);
+    const sessions = driver.getAvailableSessions(meta.directory);
+    if (sessions.length === 0) {
+      const displayTool = meta.tool === 'agy' ? 'antigravity' : meta.tool;
+      return interaction.editReply({
+        content: `❌ **No available sessions found**\n* **Tool:** \`${displayTool.toUpperCase()}\`\n* **Directory:** \`${meta.directory}\`\n\nNo native session history was detected in the tool's local database for this project path.`
+      });
+    }
+    
+    const { StringSelectMenuBuilder } = require('discord.js');
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`thread-control-select:attach:${threadId}`)
+      .setPlaceholder('Select a session to attach to...')
+      .addOptions(sessions.map(s => ({
+        label: (s.label || s.description || s.id).substring(0, 100),
+        value: s.id,
+        description: (s.description || s.id).substring(0, 100)
+      })));
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+    await interaction.editReply({
+      content: '🔗 **Select a session to bind/attach to this thread:**',
+      components: [row]
+    });
+  } else if (action === 'toggle-detail') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      return;
+    }
+    const meta = getOrInferMetadata(interaction.channel);
+    if (!meta) {
+      return interaction.editReply({ content: '❌ Session metadata not found.' });
+    }
+
+    meta.hideExecDetails = !meta.hideExecDetails;
+    saveMetadata();
+
+    await updateThreadControlMessage(interaction.channel, meta);
+
+    const mode = meta.hideExecDetails ? 'Clean (assistant text only)' : 'Verbose (including command/exec actions)';
+    await interaction.editReply({
+      content: `🔄 **Output detail mode toggled to:** \`${mode}\` for this thread.`
+    });
+  } else if (action === 'delete') {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('thread:confirm-delete')
+        .setLabel('Confirm Delete')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🗑️'),
+      new ButtonBuilder()
+        .setCustomId('thread:cancel-delete')
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary)
+    );
+    await interaction.reply({
+      content: '⚠️ **Are you sure you want to delete this thread?** This will archive/delete the thread and remove its session metadata.',
+      components: [row],
+      ephemeral: true
+    });
+  }
+}
+
+async function handleThreadControlSelect(interaction) {
+  const customId = interaction.customId;
+  const parts = customId.split(':');
+  const action = parts[1];
+  const threadId = parts[2];
+  const selectedSessionId = interaction.values[0];
+
+  if (action === 'attach') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    const meta = getOrInferMetadata(interaction.channel);
+    if (meta) {
+      // Kill any existing active task for this *Discord thread* to prevent stray input
+      if (processManager.activeTasks.has(interaction.channelId)) {
+        await processManager.killTask(interaction.channelId, { archiveThread: false });
+        console.log(`[Attach] Killed old task for thread ${interaction.channelId}`);
+      } else if (processManager.activeTasks.has(threadId)) {
+        // Fallback for any legacy cases
+        await processManager.killTask(threadId, { archiveThread: false });
+        console.log(`[Attach] Killed old task via parsed threadId ${threadId}`);
+      }
+
+      meta.sessionId = selectedSessionId;
+      meta.hasStarted = true;
+      console.log(`[Attach] Updating metadata for ${interaction.channelId}: sessionId=${selectedSessionId}`);
+      threadMetadata.set(interaction.channelId, meta);
+      saveMetadata();
+
+      // Update thread control message on top with the new metadata and row
+      await updateThreadControlMessage(interaction.channel, meta);
+
+      await interaction.followUp({
+        content: `✅ **Thread successfully bound/attached to session ID:** \`${selectedSessionId}\`\nResuming will now load this session's history.`,
+        ephemeral: true
+      });
+    }
+  }
+}
+
+async function handlePtyCtrlButton(interaction) {
+  const customId = interaction.customId;
+  const parts = customId.split(':');
+  const action = parts[1];
+  const tool = parts[2];
+  const threadId = parts[3];
+
+  const meta = getOrInferMetadata(interaction.channel);
+  if (!meta) {
+    return interaction.reply({ content: '❌ Session metadata not found.', ephemeral: true });
+  }
+
+  if (action === 'new') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    await interaction.message.edit({
+      content: `⏳ Spawning PTY terminal for \`${tool.toUpperCase()}\`...`,
+      components: []
+    });
+    
+    await ptyManager.startSession({
+      thread: interaction.channel,
+      tool,
+      directory: meta.directory
+    });
+  } else if (action === 'attach') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      return;
+    }
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(tool);
+    const sessions = driver.getAvailableSessions(meta.directory);
+    if (sessions.length === 0) {
+      const displayTool = tool === 'agy' ? 'antigravity' : tool;
+      await interaction.editReply({
+        content: `❌ **No available sessions found**\n* **Tool:** \`${displayTool.toUpperCase()}\`\n* **Directory:** \`${meta.directory}\`\n\nNo native session history was detected. Starting a new PTY session instead...`
+      });
+      await interaction.message.edit({
+        content: `⏳ Spawning PTY terminal for \`${tool.toUpperCase()}\`...`,
+        components: []
+      });
+      await ptyManager.startSession({
+        thread: interaction.channel,
+        tool,
+        directory: meta.directory
+      });
+      return;
+    }
+    
+    const { StringSelectMenuBuilder } = require('discord.js');
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`pty-ctrl-select:attach:${tool}:${threadId}`)
+      .setPlaceholder('Select a session to attach to...')
+      .addOptions(sessions.map(s => ({
+        label: (s.label || s.description || s.id).substring(0, 100),
+        value: s.id,
+        description: (s.description || s.id).substring(0, 100)
+      })));
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+    await interaction.editReply({
+      content: '🔗 **Select a session to attach the PTY terminal to:**',
+      components: [row]
+    });
+  }
+}
+
+async function handlePtyCtrlSelect(interaction) {
+  const customId = interaction.customId;
+  const parts = customId.split(':');
+  const action = parts[1];
+  const tool = parts[2];
+  const threadId = parts[3];
+  const selectedSessionId = interaction.values[0];
+
+  if (action === 'attach') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    const meta = getOrInferMetadata(interaction.channel);
+    if (meta) {
+      meta.sessionId = selectedSessionId;
+      meta.hasStarted = true;
+      saveMetadata();
+    }
+    
+    try {
+      const msg = await interaction.channel.messages.fetch(interaction.message.id);
+      await msg.edit({
+        content: `⏳ Spawning PTY terminal attached to session \`${selectedSessionId.substring(0, 8)}\`...`,
+        components: []
+      });
+    } catch (e) {}
+
+    await ptyManager.startSession({
+      thread: interaction.channel,
+      tool,
+      directory: meta ? meta.directory : '/home/dev',
+      sessionId: selectedSessionId
+    });
+  }
+}
+
+async function handleExportControlButton(interaction, threadId, isVerbose = false) {
+  const meta = getOrInferMetadata(interaction.channel);
+  if (!meta) {
+    return interaction.reply({ content: '❌ Session metadata not found.', ephemeral: true });
+  }
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch (e) {
+    return;
+  }
+
+  const { getDriver } = require('../drivers');
+  const driver = getDriver(meta.tool);
+  let exportPath = null;
+  
+  if (typeof driver.exportSession === 'function') {
+    exportPath = driver.exportSession(meta.sessionId || '', meta.directory, { verbose: isVerbose });
+  }
+
+  if (!exportPath) {
+    exportPath = await exportTaskToTmp(threadId, meta, isVerbose);
+  }
+
+  if (exportPath && fs.existsSync(exportPath)) {
+    try {
+      await interaction.editReply({
+        content: isVerbose ? `📝 **Verbose Session Export Ready (Including Actions):**` : `📤 **Clean Session Export Ready:**`,
+        files: [exportPath]
+      });
+      fs.unlinkSync(exportPath);
+    } catch (err) {
+      console.error('Failed to send export file to Discord:', err);
+      await interaction.editReply({ content: `❌ Failed to send export file: ${err.message}` });
+    }
+  } else {
+    await interaction.editReply({ content: '❌ Failed to export session.' });
+  }
+}
+
+async function exportTaskToTmp(threadId, meta, isVerbose = false) {
+  const fs = require('fs');
+  const path = require('path');
+  const exportFile = path.join('/tmp', `gateway-export-${meta.tool}-${threadId}.md`);
+  
+  try {
+    const client = require('../utils/state').getClient();
+    const thread = await client.channels.fetch(threadId);
+    if (!thread) return null;
+    const messages = await thread.messages.fetch({ limit: 100 });
+    const sortedMessages = [...messages.values()].reverse();
+
+    let markdownContent = `# Discord Chat-Ops Session Export (Fallback)\n* **Tool:** ${(meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase()}\n* **Directory:** \`${meta.directory}\`\n* **Session ID:** \`${meta.sessionId || 'None'}\`\n* **Export Time:** ${new Date().toISOString()}\n\n---\n\n## Conversation Log\n\n`;
+
+    sortedMessages.forEach(msg => {
+      const timeStr = msg.createdAt.toISOString();
+      const author = msg.author.bot ? `🤖 **Bot (${msg.author.username})**` : `👤 **User (${msg.author.username})**`;
+      
+      let content = msg.content;
+      if (!isVerbose && msg.author.bot) {
+        if (
+          content.includes('🚀 **Starting agent session...**') ||
+          content.includes('🔄 **Resuming conversation session...**') ||
+          content.includes('✅ **Agent execution completed successfully!**') ||
+          content.includes('exited ') ||
+          content.includes('Command:') ||
+          content.includes('Updated:') ||
+          content.includes('Notice:') ||
+          content.includes('Select a session to bind/attach') ||
+          content.includes('Thread successfully bound/attached')
+        ) {
+          return;
+        }
+
+        const { getDriver } = require('../drivers');
+        const driver = getDriver(meta.tool);
+        if (driver && typeof driver.stripDuplicateHistory === 'function') {
+          content = driver.stripDuplicateHistory('', content, true);
+        }
+      }
+
+      if (content.trim()) {
+        markdownContent += `### [${timeStr}] ${author}\n${content}\n\n`;
+      }
+    });
+
+    fs.writeFileSync(exportFile, markdownContent);
+    return exportFile;
+  } catch (err) {
+    console.error('Fallback export failed:', err);
+    return null;
+  }
+}
+
+function getThreadControlRow(threadId, meta) {
+  const { ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
+  const isRunning = processManager.activeTasks.has(threadId);
+
+  const row1Buttons = [];
+  if (isRunning) {
+    row1Buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`thread-control:stop:${threadId}`)
+        .setLabel('Stop')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🛑')
+    );
+  }
+
+  if (meta && meta.sessionId) {
+    row1Buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`thread-control:export-clean:${threadId}`)
+        .setLabel('Export')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('📤'),
+      new ButtonBuilder()
+        .setCustomId(`thread-control:export-all:${threadId}`)
+        .setLabel('Export All')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('📝')
+    );
+  }
+
+  row1Buttons.push(
+    new ButtonBuilder()
+      .setCustomId(`thread-control:toggle-detail:${threadId}`)
+      .setLabel(meta && meta.hideExecDetails ? 'Show Actions' : 'Hide Actions')
+      .setStyle(meta && meta.hideExecDetails ? ButtonStyle.Secondary : ButtonStyle.Success)
+      .setEmoji(meta && meta.hideExecDetails ? '👁️' : '⚡')
+  );
+
+  const row2Buttons = [
+    new ButtonBuilder()
+      .setCustomId(`thread-control:attach:${threadId}`)
+      .setLabel(meta && meta.sessionId ? 'Change Session' : 'Attach Session')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔗'),
+    new ButtonBuilder()
+      .setCustomId(`thread-control:delete:${threadId}`)
+      .setLabel('Delete')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🗑️')
+  ];
+
+  const rows = [];
+  rows.push(new ActionRowBuilder().addComponents(...row1Buttons));
+  rows.push(new ActionRowBuilder().addComponents(...row2Buttons));
+  return rows;
+}
+
+async function updateThreadControlMessage(channel, meta) {
+  if (!channel || !channel.isThread()) return;
+  try {
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(meta.tool);
+    if (meta.sessionId && driver && typeof driver.getSessionTitle === 'function') {
+      const rawTitle = driver.getSessionTitle(meta.sessionId, meta.directory);
+      if (rawTitle) {
+        meta.sessionTitle = rawTitle.split('\n')[0].split('---')[0].trim();
+      }
+    }
+
+    const messages = await channel.messages.fetch({ limit: 20 });
+    const botControlMsg = messages.find(msg => 
+      msg.author.id === channel.client.user.id && 
+      msg.components.length > 0 && 
+      (msg.content.startsWith('### 🤖') || msg.content.startsWith('### 📟'))
+    );
+    
+    if (botControlMsg) {
+      const updatedContent = updateMessageContent(botControlMsg.content, meta);
+      const updatedRow = getThreadControlRow(channel.id, meta);
+      await botControlMsg.edit({
+        content: updatedContent,
+        components: updatedRow
+      });
+    }
+  } catch (err) {
+    console.error('Failed to update thread control message:', err);
+  }
+}
+
+function updateMessageContent(oldContent, meta) {
+  let lines = oldContent.split('\n');
+  lines = lines.filter(l => !l.includes('**Attached Session ID:**') && !l.includes('**Prompt:**') && !l.includes('**Detail Mode:**'));
+  
+  if (meta) {
+    let insertIndex = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].startsWith('* **')) {
+        insertIndex = i + 1;
+        break;
+      }
+    }
+    
+    const modeStr = meta.hideExecDetails ? 'Clean (Text Only)' : 'Verbose (Show Actions)';
+    const detailLine = `* **Detail Mode:** \`${modeStr}\``;
+    if (insertIndex !== -1) {
+      lines.splice(insertIndex, 0, detailLine);
+      insertIndex++; // Increment to preserve insertion order if adding next line
+    } else {
+      lines.push(detailLine);
+    }
+
+    if (meta.sessionId) {
+      let sessionNameSuffix = '';
+      if (meta.sessionTitle) {
+        sessionNameSuffix = ` (${meta.sessionTitle})`;
+      }
+      const attachedLine = `* **Attached Session ID:** \`${meta.sessionId}\`${sessionNameSuffix}`;
+      if (insertIndex !== -1) {
+        lines.splice(insertIndex, 0, attachedLine);
+      } else {
+        lines.push(attachedLine);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
 module.exports = {
   handleChoiceButton,
   handleThreadButton,
@@ -525,4 +1024,10 @@ module.exports = {
   handleSessionButton,
   handleGatewayButton,
   handleProcessButton,
+  handleThreadControlButton,
+  handleThreadControlSelect,
+  handlePtyCtrlButton,
+  handlePtyCtrlSelect,
+  getThreadControlRow,
+  updateThreadControlMessage,
 };

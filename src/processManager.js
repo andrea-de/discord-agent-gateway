@@ -26,12 +26,10 @@ class ProcessManager extends EventEmitter {
     if (minutes > 0) parts.push(`${minutes}m`);
     parts.push(`${seconds}s`);
     return parts.join(' ');
-  }
-
-  /**
+  }  /**
    * Spawns a new agent process for a given Discord thread.
    */
-  async startTask({ thread, tool, directory, mode, prompt, isContinue = false, previousHistoryText = '', model, flags, sandbox }) {
+  async startTask({ thread, tool, directory, mode, prompt, isContinue = false, previousHistoryText = '', model, flags, sandbox, sessionId = null }) {
     const threadId = thread.id;
     
     // Resolve home directory tilde if present
@@ -65,12 +63,19 @@ class ProcessManager extends EventEmitter {
       }, 500);
     }
 
+    const targetDir = path.join('/tmp/discord-agent-gateway/logs', tool, sessionId || threadId);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
     // Resolve driver
     const driver = getDriver(tool);
 
     // 2. Prepare command and arguments
     const cmd = driver.getCommand();
-    const args = driver.getArgs({ prompt, mode, isContinue, model, flags, directory, sandbox });
+    const args = sessionId 
+      ? driver.getResumeArgs({ sessionId, prompt, mode, flags, directory, sandbox })
+      : driver.getArgs({ prompt, mode, isContinue, model, flags, directory, sandbox });
 
     // 3. Spawn process
     const envPath = process.env.PATH || '';
@@ -125,7 +130,7 @@ class ProcessManager extends EventEmitter {
       exitCode: null,
       inactivityTimer: null,
       flushTimer: null,
-      fullLogFile: path.join(directory, `.gateway-${tool}-${threadId}-${Date.now()}.log`)
+      fullLogFile: path.join(targetDir, `run-${Date.now()}.log`)
     };
 
     this.activeTasks.set(threadId, taskContext);
@@ -163,7 +168,7 @@ Time: ${taskContext.startTime.toISOString()}
     const controlRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`process:stop:${threadId}`)
-        .setLabel('Stop Request')
+        .setLabel('Stop')
         .setStyle(ButtonStyle.Danger)
         .setEmoji('🛑')
     );
@@ -175,6 +180,13 @@ Time: ${taskContext.startTime.toISOString()}
       });
     } catch (err) {
       console.error('Failed to send process control message:', err);
+    }
+    // Update thread control row to enable the Stop button now that task is active
+    const { updateThreadControlMessage } = require('./handlers/buttonHandlers');
+    const { threadMetadata } = require('./utils/state');
+    const meta = threadMetadata.get(threadId);
+    if (meta) {
+      updateThreadControlMessage(thread, meta).catch(e => {});
     }
 
     return taskContext;
@@ -215,7 +227,10 @@ Time: ${taskContext.startTime.toISOString()}
    * Emulates a rolling visual terminal block.
    */
   async flushLogsToDiscord(task) {
-    const newContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator || '');
+    const { threadMetadata } = require('./utils/state');
+    const meta = threadMetadata.get(task.threadId);
+    const hideExecDetails = meta ? meta.hideExecDetails : false;
+    const newContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator || '', hideExecDetails);
     if (!newContent.trim()) return;
     if (newContent === task.lastFlushedContent) return;
     task.lastFlushedContent = newContent;
@@ -627,6 +642,17 @@ Signal: ${signal}
 Duration: ${durationStr}\n`);
 
     this.activeTasks.delete(task.threadId);
+    
+    // Update thread control row to disable the Stop button now that task ended
+    try {
+      const { updateThreadControlMessage } = require('./handlers/buttonHandlers');
+      const { threadMetadata } = require('./utils/state');
+      const meta = threadMetadata.get(task.threadId);
+      if (meta) {
+        updateThreadControlMessage(task.thread, meta).catch(e => {});
+      }
+    } catch (e) {}
+
     this.emit('taskEnded', task);
   }
 
@@ -651,6 +677,38 @@ Duration: ${durationStr}\n`);
 
     fs.appendFileSync(task.fullLogFile, `\n--- PROCESS ERROR ---\n${err.stack}\n`);
     this.activeTasks.delete(task.threadId);
+
+    // Update thread control row to disable the Stop button now that task failed
+    try {
+      const { updateThreadControlMessage } = require('./handlers/buttonHandlers');
+      const { threadMetadata } = require('./utils/state');
+      const meta = threadMetadata.get(task.threadId);
+      if (meta) {
+        updateThreadControlMessage(task.thread, meta).catch(e => {});
+      }
+    } catch (e) {}
+  }
+
+  renameLogDir(threadId, sessionId) {
+    const task = this.activeTasks.get(threadId);
+    if (!task) return;
+    
+    const fs = require('fs');
+    const path = require('path');
+    const oldDir = path.join('/tmp/discord-agent-gateway/logs', task.tool, threadId);
+    const newDir = path.join('/tmp/discord-agent-gateway/logs', task.tool, sessionId);
+    
+    if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
+      try {
+        fs.mkdirSync(path.dirname(newDir), { recursive: true });
+        fs.renameSync(oldDir, newDir);
+        const filename = path.basename(task.fullLogFile);
+        task.fullLogFile = path.join(newDir, filename);
+        console.log(`[processManager] Renamed log directory from ${oldDir} to ${newDir}`);
+      } catch (err) {
+        console.error('Failed to rename log directory:', err);
+      }
+    }
   }
 }
 

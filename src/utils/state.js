@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 let client = null;
-let threadMetadata = new Map();
-const METADATA_FILE = path.join(__dirname, '../../.thread-metadata.json');
+const threadMetadata = new Map();
+const METADATA_DIR = path.join(os.homedir(), '.discord-agent-gateway');
+const METADATA_FILE = path.join(METADATA_DIR, 'metadata.json');
 
 const uiState = {
   onlineMessage: null,
@@ -25,7 +27,10 @@ function loadMetadata() {
   try {
     if (fs.existsSync(METADATA_FILE)) {
       const data = JSON.parse(fs.readFileSync(METADATA_FILE, 'utf8'));
-      threadMetadata = new Map(Object.entries(data));
+      threadMetadata.clear();
+      for (const [key, val] of Object.entries(data)) {
+        threadMetadata.set(key, val);
+      }
       console.log(`Loaded ${threadMetadata.size} thread metadata sessions from disk.`);
     }
   } catch (e) {
@@ -35,6 +40,9 @@ function loadMetadata() {
 
 function saveMetadata() {
   try {
+    if (!fs.existsSync(METADATA_DIR)) {
+      fs.mkdirSync(METADATA_DIR, { recursive: true });
+    }
     const obj = Object.fromEntries(threadMetadata);
     fs.writeFileSync(METADATA_FILE, JSON.stringify(obj, null, 2));
   } catch (e) {
@@ -42,25 +50,49 @@ function saveMetadata() {
   }
 }
 
-const USAGE_FILE = path.join(__dirname, '../../.usage-registry.json');
-function recordUsage(tool, threadId, model, tokens) {
-  if (!tokens || isNaN(tokens)) return;
-  try {
-    let data = [];
-    if (fs.existsSync(USAGE_FILE)) {
-      data = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
+function getOrInferMetadata(channel) {
+  if (!channel) return null;
+  const threadId = channel.id;
+  let meta = threadMetadata.get(threadId);
+  if (meta) return meta;
+
+  if (channel.isThread()) {
+    try {
+      const { resolveGatewayAndProject, resolveProjectDirectory } = require('../services/projectService');
+      const parent = channel.parent;
+      if (parent) {
+        const { project } = resolveGatewayAndProject(parent);
+        if (project) {
+          const dir = resolveProjectDirectory(project);
+          if (dir) {
+            const threadName = channel.name.toLowerCase();
+            let inferredTool = null;
+            if (threadName.includes('gemini')) inferredTool = 'gemini';
+            else if (threadName.includes('antigravity') || threadName.includes('[agy]') || threadName.includes('[antigravity]')) inferredTool = 'agy';
+            else if (threadName.includes('codex')) inferredTool = 'codex';
+            else if (threadName.includes('bash')) inferredTool = 'bash';
+
+            if (inferredTool) {
+              meta = {
+                tool: inferredTool,
+                directory: dir,
+                mode: 'review',
+                hasStarted: false,
+                hideExecDetails: true
+              };
+              threadMetadata.set(threadId, meta);
+              saveMetadata();
+              console.log(`[Self-Healing] Successfully recovered metadata for thread ${threadId}: tool=${inferredTool}, dir=${dir}`);
+              return meta;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Self-Healing] Failed to infer metadata:', err);
     }
-    data.push({
-      timestamp: new Date().toISOString(),
-      threadId,
-      tool,
-      model: model || 'Default',
-      tokens
-    });
-    fs.writeFileSync(USAGE_FILE, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error('Failed to record usage:', e);
   }
+  return null;
 }
 
 module.exports = {
@@ -71,5 +103,5 @@ module.exports = {
   saveMetadata,
   uiState,
   currentGateway,
-  recordUsage
+  getOrInferMetadata,
 };

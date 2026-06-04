@@ -132,14 +132,18 @@ async function handleAgentCommand(interaction) {
     const sandboxDisplay = tool === 'codex'
       ? (sandbox || (mode === 'yolo' ? 'danger-full-access' : 'workspace-write'))
       : (sandbox !== undefined && sandbox !== null ? sandbox : 'Default');
-    const displayTool = tool === 'agy' ? 'antigravity' : tool;
-    await thread.send(`### 🤖 ${hasPrompt ? 'Task' : 'Interactive Session'} Initiated
-* **Tool:** \`${displayTool.toUpperCase()}\`
-* **Directory:** \`${resolvedDirectory}\`
-* **Mode:** \`${mode.toUpperCase()}\`
-* **Model:** \`${model || 'Default'}\`
-* **Sandbox Policy:** \`${sandboxDisplay}\`
-${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
+    const displayToolName = tool === 'agy' ? 'antigravity' : tool;
+    const meta = { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: hasPrompt, hideExecDetails: true };
+    threadMetadata.set(thread.id, meta);
+    saveMetadata();
+
+    const { getThreadControlRow } = require('./buttonHandlers');
+    const controlRow = getThreadControlRow(thread.id, meta);
+
+    await thread.send({
+      content: `### 🤖 ${hasPrompt ? 'Task' : 'Interactive Session'} Initiated\n* **Tool:** \`${displayToolName.toUpperCase()}\`\n* **Directory:** \`${resolvedDirectory}\`\n* **Mode:** \`${mode.toUpperCase()}\`\n* **Model:** \`${model || 'Default'}\`\n* **Sandbox Policy:** \`${sandboxDisplay}\`${flags ? `\n* **Flags:** \`${flags}\`` : ''}`,
+      components: controlRow
+    });
 
     if (permissionWarning) {
       const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=105226685456&scope=bot%20applications.commands`;
@@ -164,7 +168,7 @@ ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
         sandbox
       });
 
-      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: true });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: true, hideExecDetails: true });
       saveMetadata();
     } else {
       await interaction.editReply({
@@ -173,7 +177,7 @@ ${flags ? `* **Flags:** \`${flags}\`\n` : ''}* **Prompt:** ${promptDisplay}`);
 
       await thread.send('⌨️ **Gateway Awaiting First Prompt**\nPlease type your first task or question directly in this thread to initiate the agent process.');
 
-      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: false });
+      threadMetadata.set(thread.id, { tool, directory: resolvedDirectory, mode, model, flags, sandbox, hasStarted: false, hideExecDetails: true });
       saveMetadata();
     }
 
@@ -340,7 +344,21 @@ async function handleRenameCommand(interaction) {
   try {
     await channel.setName(newName);
     meta.threadName = newName;
+    
+    if (meta.sessionId) {
+      const { getDriver } = require('../drivers');
+      const driver = getDriver(meta.tool);
+      if (driver && typeof driver.renameSession === 'function') {
+        driver.renameSession(meta.sessionId, newName);
+      }
+    }
+    
     saveMetadata();
+    
+    // Update control panel message to reflect the new name in the header
+    const { updateThreadControlMessage } = require('./buttonHandlers');
+    await updateThreadControlMessage(channel, meta);
+    
     await interaction.editReply(`✅ **Thread renamed successfully to:** \`${newName}\``);
   } catch (err) {
     console.error('Rename failed:', err);
@@ -590,33 +608,65 @@ async function handleTerminalCommand(interaction) {
       reason: 'Interactive PTY Start'
     });
 
-    await thread.send(`### 📟 Persistent PTY Session Initiated
-* **Tool:** \`${tool.toUpperCase()}\`
+    threadMetadata.set(thread.id, { 
+      tool, 
+      directory: resolvedDirectory, 
+      isPty: true,
+      hasStarted: false,
+      hideExecDetails: true
+    });
+    saveMetadata();
+
+    if (tool === 'bash') {
+      await thread.send(`### 📟 Persistent PTY Session Initiated
+* **Tool:** \`BASH\`
 * **Directory:** \`${resolvedDirectory}\`
 * **Type:** \`INTERACTIVE PTY\`
 ---
 *Note: Any message sent in this thread will be piped directly to the terminal's stdin as keystrokes.*`);
+
+      await ptyManager.startSession({
+        thread,
+        tool,
+        directory: resolvedDirectory
+      });
+      
+      const meta = threadMetadata.get(thread.id);
+      if (meta) {
+        meta.hasStarted = true;
+        saveMetadata();
+      }
+    } else {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`pty-ctrl:new:${tool}:${thread.id}`)
+          .setLabel('Start New PTY')
+          .setStyle(ButtonStyle.Success)
+          .setEmoji('🆕'),
+        new ButtonBuilder()
+          .setCustomId(`pty-ctrl:attach:${tool}:${thread.id}`)
+          .setLabel('Attach to Session')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('🔗')
+      );
+
+      await thread.send({
+        content: `### 📟 Persistent PTY Session Configuration
+* **Tool:** \`${tool.toUpperCase()}\`
+* **Directory:** \`${resolvedDirectory}\`
+* **Type:** \`INTERACTIVE PTY\`
+---
+Please select how you would like to initiate this PTY session:`,
+        components: [row]
+      });
+    }
 
     if (permissionWarning) {
       const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=105226685456&scope=bot%20applications.commands`;
       await thread.send(`⚠️ **Notice:** ${permissionWarning} Thread fell back to the current channel (<#${interaction.channel.id}>). To enable auto-channel creation for new projects under an **${categoryName}** category, please grant the bot the **Manage Channels** permission, or [click here to re-authorize the bot](${inviteUrl}).`);
     }
 
-    await ptyManager.startSession({
-      thread,
-      tool,
-      directory: resolvedDirectory
-    });
-
-    threadMetadata.set(thread.id, { 
-      tool, 
-      directory: resolvedDirectory, 
-      isPty: true,
-      hasStarted: true 
-    });
-    saveMetadata();
-
-    await interaction.editReply({ content: `✅ Terminal session started in <#${thread.id}>` });
+    await interaction.editReply({ content: `✅ Terminal session thread created in <#${thread.id}>` });
   } catch (err) {
     console.error('PTY task start failed:', err);
     await interaction.editReply({ content: `❌ Failed to start terminal: ${err.message}` });
@@ -631,84 +681,11 @@ async function handleUsageCommand(interaction) {
     return;
   }
 
-  const USAGE_FILE = path.join(__dirname, '../../.usage-registry.json');
   const threadId = interaction.channelId;
   const meta = threadMetadata.get(threadId);
 
-  let threadTokens = 0;
-  let globalTokens = 0;
-  let toolTotals = { agy: 0, codex: 0, gemini: 0 };
-  let threadTotalsMap = new Map();
-  let threadModelTotals = new Map();
-
-  try {
-    if (fs.existsSync(USAGE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
-      data.forEach(record => {
-        globalTokens += record.tokens;
-        if (record.tool === 'agy') toolTotals.agy += record.tokens;
-        if (record.tool === 'codex') toolTotals.codex += record.tokens;
-        if (record.tool === 'gemini') toolTotals.gemini += record.tokens;
-
-        if (record.threadId) {
-          if (record.threadId === threadId) {
-            threadTokens += record.tokens;
-            let modelKey = record.model;
-            if (!modelKey) {
-              if (record.tool === 'agy') modelKey = 'Gemini 3.5 Flash';
-              else if (record.tool === 'gemini') modelKey = 'Gemini CLI Default';
-              else modelKey = 'Default Codex Model';
-            }
-            const prevModelTokens = threadModelTotals.get(modelKey) || 0;
-            threadModelTotals.set(modelKey, prevModelTokens + record.tokens);
-          }
-          const current = threadTotalsMap.get(record.threadId) || { tool: record.tool, tokens: 0 };
-          current.tokens += record.tokens;
-          threadTotalsMap.set(record.threadId, current);
-        }
-      });
-    }
-  } catch (e) {
-    console.error('Failed to read usage registry:', e);
-  }
-
-  if (meta) {
-    const { getDriver } = require('../drivers');
-    try {
-      const driver = getDriver(meta.tool);
-      let usageCard = driver.getProviderUsageInfo(threadTokens, meta.model, threadModelTotals);
-      
-      // If it is Gemini or Antigravity, append the live quota details
-      if (meta.tool === 'gemini') {
-        const quotaService = require('../utils/quotaService');
-        const geminiToken = await quotaService.getGeminiToken();
-        const geminiProj = quotaService.getGeminiProjectId();
-        const geminiData = await quotaService.getQuotaDetails(geminiToken, geminiProj);
-        
-        usageCard += `\n\n### ♊ Live API Quotas (Project-based: \`${geminiProj}\`)\n`;
-        if (geminiToken && geminiData) {
-          usageCard += quotaService.formatQuotaMarkdown(geminiData, "Gemini", geminiProj);
-        } else {
-          usageCard += `*Credentials unavailable or failed to connect to Google API.*`;
-        }
-      } else if (meta.tool === 'agy') {
-        const quotaService = require('../utils/quotaService');
-        const agyToken = await quotaService.getAntigravityToken();
-        const agyData = await quotaService.getQuotaDetails(agyToken, "");
-        
-        usageCard += `\n\n### 🪐 Live API Quotas (Consumer-based)\n`;
-        if (agyToken && agyData) {
-          usageCard += quotaService.formatQuotaMarkdown(agyData, "Antigravity", "");
-        } else {
-          usageCard += `*Credentials unavailable or failed to connect to Google API.*`;
-        }
-      }
-
-      return interaction.editReply(usageCard);
-    } catch (err) {
-      return interaction.editReply(`❌ **Failed to retrieve provider usage details:** ${err.message}`);
-    }
-  } else {
+  if (!meta) {
+    // If not in a registered thread, just query and show general live quotas
     try {
       const quotaService = require('../utils/quotaService');
       const liveQuotaReport = await quotaService.getLiveQuotaReport();
@@ -716,6 +693,41 @@ async function handleUsageCommand(interaction) {
     } catch (err) {
       return interaction.editReply(`❌ **Failed to retrieve live Google API quotas:** ${err.message}`);
     }
+  }
+
+  let usageCard = `## 📊 Live Usage & Quota Report\n* **Tool:** \`${(meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase()}\`\n`;
+
+  try {
+    const quotaService = require('../utils/quotaService');
+    
+    if (meta.tool === 'gemini') {
+      const geminiToken = await quotaService.getGeminiToken();
+      const geminiProj = quotaService.getGeminiProjectId();
+      const geminiData = await quotaService.getQuotaDetails(geminiToken, geminiProj);
+      
+      usageCard += `\n### ♊ Live API Quotas (Project-based: \`${geminiProj}\`)\n`;
+      if (geminiToken && geminiData) {
+        usageCard += quotaService.formatQuotaMarkdown(geminiData, "Gemini", geminiProj);
+      } else {
+        usageCard += `*Credentials unavailable or failed to connect to Google API.*`;
+      }
+    } else if (meta.tool === 'agy') {
+      const agyToken = await quotaService.getAntigravityToken();
+      const agyData = await quotaService.getQuotaDetails(agyToken, "");
+      
+      usageCard += `\n### 🪐 Live API Quotas (Consumer-based)\n`;
+      if (agyToken && agyData) {
+        usageCard += quotaService.formatQuotaMarkdown(agyData, "Antigravity", "");
+      } else {
+        usageCard += `*Credentials unavailable or failed to connect to Google API.*`;
+      }
+    } else {
+      usageCard += `\n*Live quota checks are not supported/configured for the \`${meta.tool}\` tool.*`;
+    }
+
+    return interaction.editReply(usageCard);
+  } catch (err) {
+    return interaction.editReply(`❌ **Failed to retrieve live API quotas:** ${err.message}`);
   }
 }
 

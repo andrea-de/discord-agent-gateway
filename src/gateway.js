@@ -12,7 +12,6 @@ const {
   loadMetadata,
   saveMetadata,
   currentGateway,
-  recordUsage
 } = require('./utils/state');
 
 const { resolveGatewayAndProject, updateProjectDashboard, updateAllProjectDashboards } = require('./services/projectService');
@@ -257,7 +256,7 @@ client.on('messageCreate', async (message) => {
       }
 
       try {
-        await processManager.startTask({
+        const taskContext = await processManager.startTask({
           thread: message.channel,
           tool: meta.tool,
           directory: meta.directory,
@@ -267,8 +266,27 @@ client.on('messageCreate', async (message) => {
           previousHistoryText: isInitialRun ? '' : (meta.historyText || ''),
           model: meta.model,
           flags: meta.flags,
-          sandbox: meta.sandbox
+          sandbox: meta.sandbox,
+          sessionId: meta.sessionId
         });
+
+        if (!meta.sessionId && taskContext) {
+          setTimeout(async () => {
+            try {
+              const resolvedSessionId = taskContext.driver.findSessionId(taskContext.directory);
+              if (resolvedSessionId) {
+                meta.sessionId = resolvedSessionId;
+                processManager.renameLogDir(message.channel.id, resolvedSessionId);
+                const { updateThreadControlMessage } = require('./handlers/buttonHandlers');
+                await updateThreadControlMessage(message.channel, meta);
+                saveMetadata();
+                console.log(`[Task Started] Automatically resolved and locked sessionId ${resolvedSessionId} for thread ${message.channel.id}`);
+              }
+            } catch (err) {
+              console.error('Failed to auto-resolve sessionId on task startup:', err);
+            }
+          }, 1500);
+        }
       } catch (err) {
         await message.channel.send(`❌ **Failed to start or resume task:** ${err.message}`);
       }
@@ -326,33 +344,23 @@ client.on('threadDelete', async (thread) => {
   }
 
   // Clean up any log files associated with this thread
-  const meta = threadMetadata.get(threadId);
-  const directory = meta ? meta.directory : (task ? task.directory : (ptySession ? ptySession.directory : null));
-
-  if (directory) {
-    try {
-      const os = require('os');
-      let resolvedDir = directory;
-      if (resolvedDir.startsWith('~')) {
-        resolvedDir = path.join(os.homedir(), resolvedDir.substring(1));
-      }
-
-      if (fs.existsSync(resolvedDir) && fs.statSync(resolvedDir).isDirectory()) {
-        const files = fs.readdirSync(resolvedDir);
-        for (const file of files) {
-          if (file.includes(`-${threadId}-`) && file.endsWith('.log')) {
-            try {
-              fs.unlinkSync(path.join(resolvedDir, file));
-              console.log(`[Thread Delete] Cleaned up log file: ${file}`);
-            } catch (err) {
-              console.error(`[Thread Delete] Failed to delete log file ${file}:`, err.message);
-            }
+  const logDir = '/tmp/discord-agent-gateway/logs';
+  try {
+    if (fs.existsSync(logDir) && fs.statSync(logDir).isDirectory()) {
+      const files = fs.readdirSync(logDir);
+      for (const file of files) {
+        if (file.includes(`-${threadId}-`) && file.endsWith('.log')) {
+          try {
+            fs.unlinkSync(path.join(logDir, file));
+            console.log(`[Thread Delete] Cleaned up log file: ${file}`);
+          } catch (err) {
+            console.error(`[Thread Delete] Failed to delete log file ${file}:`, err.message);
           }
         }
       }
-    } catch (err) {
-      console.error('[Thread Delete] Error scanning directory for logs:', err);
     }
+  } catch (err) {
+    console.error('[Thread Delete] Error scanning directory for logs:', err);
   }
 
   // Fallback delete of activeLogPath
@@ -380,26 +388,37 @@ client.on('threadUpdate', async (oldThread, newThread) => {
   }
 });
 
-// Listen to processManager task ending to record the final conversation turn history and usage
-processManager.on('taskEnded', (task) => {
+processManager.on('taskEnded', async (task) => {
   const meta = threadMetadata.get(task.threadId);
   if (meta) {
-    const finalNewContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator);
+    let sessionIdChanged = false;
+    if (!meta.sessionId) {
+      const resolvedSessionId = task.driver.findSessionId(task.directory);
+      if (resolvedSessionId) {
+        meta.sessionId = resolvedSessionId;
+        processManager.renameLogDir(task.threadId, resolvedSessionId);
+        console.log(`[Task Ended] Resolved and locked sessionId ${resolvedSessionId} for thread ${task.threadId}`);
+        sessionIdChanged = true;
+      }
+    }
+    const hideExecDetails = meta ? meta.hideExecDetails : false;
+    const finalNewContent = task.driver.stripDuplicateHistory(task.previousHistoryText, task.processStdoutAccumulator, hideExecDetails);
     
     // Append the new content of this run to the session history
     meta.historyText = ((task.previousHistoryText || '') + '\n' + finalNewContent).trim();
     saveMetadata();
     console.log(`[Task Ended] Updated historyText for thread ${task.threadId}.`);
 
-    // Parse and record token usage
-    const logs = task.processStdoutAccumulator;
-    const tokenMatch = logs.match(/tokens used\s*\n\s*([\d,]+)/i) || logs.match(/(\d+)\s*(?:total\s*)?tokens/i) || logs.match(/tokens?:\s*(\d+)/i);
-    if (tokenMatch) {
-      const tokenStr = tokenMatch[1].replace(/,/g, '');
-      const tokens = parseInt(tokenStr, 10);
-      if (!isNaN(tokens)) {
-        recordUsage(task.tool, task.threadId, meta.model, tokens);
-        console.log(`[Task Ended] Recorded usage: ${tokens} tokens for ${task.tool} (${meta.model}) in thread ${task.threadId}.`);
+    if (sessionIdChanged) {
+      try {
+        const { updateThreadControlMessage } = require('./handlers/buttonHandlers');
+        const client = require('./utils/state').getClient();
+        const thread = await client.channels.fetch(task.threadId);
+        if (thread) {
+          await updateThreadControlMessage(thread, meta);
+        }
+      } catch (err) {
+        console.error('Failed to update control message after resolving session ID:', err);
       }
     }
   }
