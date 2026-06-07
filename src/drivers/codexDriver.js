@@ -589,6 +589,137 @@ class CodexDriver {
       throw e;
     }
   }
+
+  exportSessionCustom(sessionId, directory, { type = 'clean', limit = null }) {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    
+    try {
+      const sessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+      const findRolloutFile = (dir, targetId) => {
+        if (!fs.existsSync(dir)) return null;
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            const found = findRolloutFile(fullPath, targetId);
+            if (found) return found;
+          } else if (entry.isFile() && entry.name.endsWith(`-${targetId}.jsonl`)) {
+            return fullPath;
+          }
+        }
+        return null;
+      };
+
+      const rolloutPath = findRolloutFile(sessionsDir, sessionId);
+      if (rolloutPath) {
+        const fileContent = fs.readFileSync(rolloutPath, 'utf8');
+        const lines = fileContent.split('\n').filter(l => l.trim().length > 0);
+        
+        const turns = [];
+        
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line);
+            const timeStr = data.timestamp ? new Date(data.timestamp).toISOString() : '';
+            
+            if (data.type === 'response_item') {
+              const payload = data.payload;
+              if (payload && payload.type === 'message') {
+                const role = payload.role;
+                
+                if (type !== 'all' && (role === 'developer' || role === 'system')) {
+                  continue;
+                }
+                
+                const text = payload.content && payload.content[0] && payload.content[0].text;
+                if (text) {
+                  let cleanedText = text;
+                  const instrIdx = cleanedText.indexOf('---');
+                  if (instrIdx !== -1 && cleanedText.includes('Gateway response style:')) {
+                    cleanedText = cleanedText.substring(0, instrIdx).trim();
+                  }
+                  
+                  let author = '🤖 **Bot (Codex)**';
+                  if (role === 'user') author = '👤 **User**';
+                  else if (role === 'developer') author = '⚙️ **System Instructions**';
+                  else if (role === 'system') author = '⚙️ **System**';
+                  
+                  turns.push({
+                    timeStr,
+                    title: author,
+                    content: cleanedText,
+                    isMessage: true
+                  });
+                }
+              } else if (payload && payload.type === 'function_call') {
+                const isWriteTool = ['replace_file_content', 'write_to_file', 'multi_replace_file_content'].includes(payload.name);
+                
+                if (type === 'all' || (type === 'activity' && isWriteTool)) {
+                  let argsObj = {};
+                  try {
+                    argsObj = JSON.parse(payload.arguments || '{}');
+                  } catch (e) {}
+                  
+                  let displayStr = '';
+                  if (isWriteTool) {
+                    displayStr = `**Edit File:** \`${argsObj.TargetFile || ''}\`\n`;
+                    if (argsObj.Description) displayStr += `**Description:** ${argsObj.Description}\n`;
+                    if (argsObj.Instruction) displayStr += `**Instruction:** ${argsObj.Instruction}\n`;
+                  } else {
+                    displayStr = `\`\`\`json\n${JSON.stringify(argsObj, null, 2)}\n\`\`\``;
+                  }
+                  
+                  turns.push({
+                    timeStr,
+                    title: `🛠️ **Tool Call: \`${payload.name}\`**`,
+                    content: displayStr,
+                    isMessage: false
+                  });
+                }
+              } else if (type === 'all' && payload && payload.type === 'function_call_output') {
+                turns.push({
+                  timeStr,
+                  title: `📤 **Tool Output**`,
+                  content: `\`\`\`\n${payload.output || ''}\n\`\`\``,
+                  isMessage: false
+                });
+              }
+            } else if (type === 'all' && data.type === 'event_msg') {
+              const payload = data.payload;
+              if (payload && payload.type === 'agent_message') {
+                turns.push({
+                  timeStr,
+                  title: `💭 **Bot Commentary**`,
+                  content: payload.message,
+                  isMessage: false
+                });
+              }
+            }
+          } catch (e) {}
+        }
+        
+        // Apply limit
+        let finalTurns = turns;
+        if (limit && limit > 0 && turns.length > limit) {
+          finalTurns = turns.slice(-limit);
+        }
+        
+        let content = `# Discord Chat-Ops Session Export\n* **Tool:** CODEX\n* **Directory:** \`${directory || 'Unknown'}\`\n* **Session ID:** \`${sessionId}\`\n* **Filter:** \`${type.toUpperCase()}\`\n* **Export Time:** ${new Date().toISOString()}\n\n---\n\n## Conversation Log\n\n`;
+        for (const turn of finalTurns) {
+          content += `### [${turn.timeStr}] ${turn.title}\n${turn.content}\n\n`;
+        }
+        
+        const exportFile = path.join('/tmp', `gateway-export-codex-${sessionId}.md`);
+        fs.writeFileSync(exportFile, content);
+        return exportFile;
+      }
+    } catch (err) {
+      console.error('Failed to custom export from rollout file:', err);
+    }
+    return null;
+  }
 }
 
 module.exports = new CodexDriver();

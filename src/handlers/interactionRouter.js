@@ -97,6 +97,8 @@ async function handleInteraction(interaction) {
   else if (interaction.isModalSubmit()) {
     if (interaction.customId.startsWith('session-modal:')) {
       await modalHandlers.handleSessionModal(interaction);
+    } else if (interaction.customId.startsWith('export-modal:')) {
+      await buttonHandlers.handleExportModalSubmit(interaction);
     }
   }
 

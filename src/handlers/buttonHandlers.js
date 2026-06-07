@@ -573,10 +573,36 @@ async function handleThreadControlButton(interaction) {
     } else {
       await interaction.editReply({ content: '❌ Failed to stop agent execution.' });
     }
-  } else if (action === 'export' || action === 'export-clean') {
-    await handleExportControlButton(interaction, threadId, false);
-  } else if (action === 'export-all') {
-    await handleExportControlButton(interaction, threadId, true);
+  } else if (action === 'export-modal') {
+    const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+    const modal = new ModalBuilder()
+      .setCustomId(`export-modal:${threadId}`)
+      .setTitle('Export Session Options');
+
+    const typeInput = new TextInputBuilder()
+      .setCustomId('export-type')
+      .setLabel('Export Type (all / clean / activity)')
+      .setStyle(TextInputStyle.Short)
+      .setValue('clean')
+      .setPlaceholder('clean = chat only; activity = only file edits')
+      .setRequired(true);
+
+    const limitInput = new TextInputBuilder()
+      .setCustomId('export-limit')
+      .setLabel('Limit to Last N Messages (blank = all)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('e.g. 10')
+      .setRequired(false);
+
+    const row1 = new ActionRowBuilder().addComponents(typeInput);
+    const row2 = new ActionRowBuilder().addComponents(limitInput);
+    modal.addComponents(row1, row2);
+    
+    try {
+      await interaction.showModal(modal);
+    } catch (e) {
+      console.error('Failed to show export modal:', e);
+    }
   } else if (action === 'attach') {
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -930,7 +956,13 @@ async function handlePtyCtrlSelect(interaction) {
   }
 }
 
-async function handleExportControlButton(interaction, threadId, isVerbose = false) {
+async function handleExportModalSubmit(interaction) {
+  const parts = interaction.customId.split(':');
+  const threadId = parts[1];
+  const exportType = interaction.fields.getTextInputValue('export-type').trim().toLowerCase();
+  const limitStr = interaction.fields.getTextInputValue('export-limit').trim();
+  const limit = limitStr ? parseInt(limitStr, 10) : null;
+
   const meta = getOrInferMetadata(interaction.channel);
   if (!meta) {
     return interaction.reply({ content: '❌ Session metadata not found.', ephemeral: true });
@@ -946,18 +978,20 @@ async function handleExportControlButton(interaction, threadId, isVerbose = fals
   const driver = getDriver(meta.tool);
   let exportPath = null;
   
-  if (typeof driver.exportSession === 'function') {
-    exportPath = driver.exportSession(meta.sessionId || '', meta.directory, { verbose: isVerbose });
+  if (driver && typeof driver.exportSessionCustom === 'function') {
+    exportPath = driver.exportSessionCustom(meta.sessionId || '', meta.directory, { type: exportType, limit: limit });
+  } else if (driver && typeof driver.exportSession === 'function') {
+    exportPath = driver.exportSession(meta.sessionId || '', meta.directory, { verbose: exportType === 'all' });
   }
 
   if (!exportPath) {
-    exportPath = await exportTaskToTmp(threadId, meta, isVerbose);
+    exportPath = await exportTaskToTmpCustom(threadId, meta, { type: exportType, limit: limit });
   }
 
   if (exportPath && fs.existsSync(exportPath)) {
     try {
       await interaction.editReply({
-        content: isVerbose ? `📝 **Verbose Session Export Ready (Including Actions):**` : `📤 **Clean Session Export Ready:**`,
+        content: `📤 **Session Export Ready (${exportType.toUpperCase()}${limit ? `, last ${limit} turns` : ''}):**`,
         files: [exportPath]
       });
       fs.unlinkSync(exportPath);
@@ -970,7 +1004,7 @@ async function handleExportControlButton(interaction, threadId, isVerbose = fals
   }
 }
 
-async function exportTaskToTmp(threadId, meta, isVerbose = false) {
+async function exportTaskToTmpCustom(threadId, meta, { type = 'clean', limit = null }) {
   const fs = require('fs');
   const path = require('path');
   const exportFile = path.join('/tmp', `gateway-export-${meta.tool}-${threadId}.md`);
@@ -982,14 +1016,15 @@ async function exportTaskToTmp(threadId, meta, isVerbose = false) {
     const messages = await thread.messages.fetch({ limit: 100 });
     const sortedMessages = [...messages.values()].reverse();
 
-    let markdownContent = `# Discord Chat-Ops Session Export (Fallback)\n* **Tool:** ${(meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase()}\n* **Directory:** \`${meta.directory}\`\n* **Session ID:** \`${meta.sessionId || 'None'}\`\n* **Export Time:** ${new Date().toISOString()}\n\n---\n\n## Conversation Log\n\n`;
+    const turns = [];
 
     sortedMessages.forEach(msg => {
       const timeStr = msg.createdAt.toISOString();
       const author = msg.author.bot ? `🤖 **Bot (${msg.author.username})**` : `👤 **User (${msg.author.username})**`;
       
       let content = msg.content;
-      if (!isVerbose && msg.author.bot) {
+      
+      if (type === 'clean' && msg.author.bot) {
         if (
           content.includes('🚀 **Starting agent session...**') ||
           content.includes('🔄 **Resuming conversation session...**') ||
@@ -1003,17 +1038,31 @@ async function exportTaskToTmp(threadId, meta, isVerbose = false) {
         ) {
           return;
         }
-
-        const { getDriver } = require('../drivers');
-        const driver = getDriver(meta.tool);
-        if (driver && typeof driver.stripDuplicateHistory === 'function') {
-          content = driver.stripDuplicateHistory('', content, true);
-        }
+      }
+      
+      if (type === 'activity' && msg.author.bot) {
+        const isActivity = content.includes('Edit File:') || content.includes('Description:') || content.includes('Instruction:') || content.includes('Tool Call:') || content.includes('Tool Output');
+        if (!isActivity) return;
       }
 
       if (content.trim()) {
-        markdownContent += `### [${timeStr}] ${author}\n${content}\n\n`;
+        turns.push({
+          timeStr,
+          author,
+          content
+        });
       }
+    });
+
+    let finalTurns = turns;
+    if (limit && limit > 0 && turns.length > limit) {
+      finalTurns = turns.slice(-limit);
+    }
+
+    let markdownContent = `# Discord Chat-Ops Session Export (Fallback)\n* **Tool:** ${(meta.tool === 'agy' ? 'antigravity' : meta.tool).toUpperCase()}\n* **Directory:** \`${meta.directory}\`\n* **Session ID:** \`${meta.sessionId || 'None'}\`\n* **Filter:** \`${type.toUpperCase()}\`\n* **Export Time:** ${new Date().toISOString()}\n\n---\n\n## Conversation Log\n\n`;
+
+    finalTurns.forEach(turn => {
+      markdownContent += `### [${turn.timeStr}] ${turn.author}\n${turn.content}\n\n`;
     });
 
     fs.writeFileSync(exportFile, markdownContent);
@@ -1042,15 +1091,10 @@ function getThreadControlRow(threadId, meta) {
   if (meta && meta.sessionId) {
     row1Buttons.push(
       new ButtonBuilder()
-        .setCustomId(`thread-control:export-clean:${threadId}`)
-        .setLabel('Export')
+        .setCustomId(`thread-control:export-modal:${threadId}`)
+        .setLabel('Export Session')
         .setStyle(ButtonStyle.Primary)
-        .setEmoji('📤'),
-      new ButtonBuilder()
-        .setCustomId(`thread-control:export-all:${threadId}`)
-        .setLabel('Export All')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('📝')
+        .setEmoji('📤')
     );
   }
 
@@ -1174,4 +1218,5 @@ module.exports = {
   handlePtyCtrlSelect,
   getThreadControlRow,
   updateThreadControlMessage,
+  handleExportModalSubmit,
 };

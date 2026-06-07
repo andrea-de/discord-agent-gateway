@@ -506,6 +506,98 @@ class AgyDriver {
       throw e;
     }
   }
+
+  exportSessionCustom(sessionId, directory, { type = 'clean', limit = null }) {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    
+    const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain', sessionId);
+    const transcriptPath = path.join(brainDir, '.system_generated', 'logs', 'transcript.jsonl');
+    if (!fs.existsSync(transcriptPath)) return null;
+
+    try {
+      const fileContent = fs.readFileSync(transcriptPath, 'utf8');
+      const lines = fileContent.split('\n').filter(l => l.trim().length > 0);
+      
+      const turns = [];
+
+      for (const line of lines) {
+        try {
+          const step = JSON.parse(line);
+          const timeStr = step.created_at ? new Date(step.created_at).toISOString() : '';
+          
+          if (step.type === 'USER_INPUT') {
+            let userContent = step.content || '';
+            const reqMatch = userContent.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
+            if (reqMatch) {
+              userContent = reqMatch[1].trim();
+            }
+            turns.push({
+              timeStr,
+              title: `👤 **User**`,
+              content: userContent
+            });
+          } else if (step.type === 'PLANNER_RESPONSE') {
+            const plannerContent = step.content || '';
+            turns.push({
+              timeStr,
+              title: `🤖 **Bot (Antigravity)**`,
+              content: plannerContent
+            });
+          } else {
+            const isWriteTool = ['replace_file_content', 'write_to_file', 'multi_replace_file_content'].includes(step.type);
+            if (type === 'all' || (type === 'activity' && isWriteTool)) {
+              let displayStr = '';
+              if (isWriteTool) {
+                if (step.tool_calls && step.tool_calls[0]) {
+                  const call = step.tool_calls[0];
+                  const args = call.args || {};
+                  displayStr = `**Edit File:** \`${args.TargetFile || ''}\`\n`;
+                  if (args.Description) displayStr += `**Description:** ${args.Description}\n`;
+                  if (args.Instruction) displayStr += `**Instruction:** ${args.Instruction}\n`;
+                } else {
+                  displayStr = `\`\`\`\n${step.content || ''}\n\`\`\``;
+                }
+              } else {
+                if (step.type !== 'CONVERSATION_HISTORY') {
+                  const toolType = step.type.replace(/_/g, ' ').toUpperCase();
+                  displayStr = `### System Action (${toolType})\n\`\`\`\n${step.content || ''}\n\`\`\``;
+                }
+              }
+              
+              if (displayStr.trim()) {
+                turns.push({
+                  timeStr,
+                  title: `🛠️ **System Action (${step.type.replace(/_/g, ' ').toUpperCase()})**`,
+                  content: displayStr
+                });
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Apply limit
+      let finalTurns = turns;
+      if (limit && limit > 0 && turns.length > limit) {
+        finalTurns = turns.slice(-limit);
+      }
+
+      let content = `# Discord Chat-Ops Session Export\n* **Tool:** ANTIGRAVITY\n* **Directory:** \`${directory || 'Unknown'}\`\n* **Session ID:** \`${sessionId}\`\n* **Filter:** \`${type.toUpperCase()}\`\n* **Export Time:** ${new Date().toISOString()}\n\n---\n\n## Conversation Log\n\n`;
+
+      for (const turn of finalTurns) {
+        content += `### [${turn.timeStr}] ${turn.title}\n${turn.content}\n\n`;
+      }
+
+      const exportFile = path.join('/tmp', `gateway-export-agy-${sessionId}.md`);
+      fs.writeFileSync(exportFile, content);
+      return exportFile;
+    } catch (err) {
+      console.error('Failed to export Antigravity session:', err);
+      return null;
+    }
+  }
 }
 
 module.exports = new AgyDriver();
