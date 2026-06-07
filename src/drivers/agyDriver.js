@@ -457,6 +457,55 @@ class AgyDriver {
       return arg;
     });
   }
+
+  deleteSession(sessionId) {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+
+    try {
+      // 1. Delete brain folder
+      const brainDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain', sessionId);
+      if (fs.existsSync(brainDir)) {
+        fs.rmSync(brainDir, { recursive: true, force: true });
+      }
+
+      // 2. Delete conversations DB files
+      const convDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
+      if (fs.existsSync(convDir)) {
+        const files = fs.readdirSync(convDir);
+        for (const file of files) {
+          if (file.startsWith(sessionId)) {
+            try {
+              fs.unlinkSync(path.join(convDir, file));
+            } catch (err) {}
+          }
+        }
+      }
+
+      // 3. Delete log files referencing this session
+      const logDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'log');
+      if (fs.existsSync(logDir)) {
+        const files = fs.readdirSync(logDir);
+        for (const file of files) {
+          if (file.startsWith('cli-') && file.endsWith('.log')) {
+            const filePath = path.join(logDir, file);
+            try {
+              const content = fs.readFileSync(filePath, 'utf8');
+              if (content.includes(sessionId)) {
+                fs.unlinkSync(filePath);
+              }
+            } catch (e) {}
+          }
+        }
+      }
+
+      return true;
+    } catch (e) {
+      console.error('Failed to delete Antigravity session:', e);
+      throw e;
+    }
+  }
 }
 
 module.exports = new AgyDriver();

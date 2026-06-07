@@ -530,6 +530,65 @@ class CodexDriver {
     }
     return !fs.existsSync(path.join(resolvedDir, '.git'));
   }
+
+  deleteSession(sessionId) {
+    const { execSync } = require('child_process');
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+
+    const stateDb = path.join(os.homedir(), '.codex', 'state_5.sqlite');
+    const logsDb = path.join(os.homedir(), '.codex', 'logs_2.sqlite');
+
+    try {
+      // 1. Delete logs from logs database
+      if (fs.existsSync(logsDb)) {
+        const deleteLogsCmd = `sqlite3 ${logsDb} "DELETE FROM logs WHERE thread_id = '${sessionId}';"`;
+        execSync(deleteLogsCmd);
+      }
+      
+      // 2. Delete threads from state database
+      if (fs.existsSync(stateDb)) {
+        const deleteThreadsCmd = `sqlite3 ${stateDb} "DELETE FROM threads WHERE id = '${sessionId}';"`;
+        execSync(deleteThreadsCmd);
+      }
+
+      // 3. Delete session rollout files from ~/.codex/sessions/
+      const sessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+      if (fs.existsSync(sessionsDir)) {
+        const deleteSessionFiles = (dir) => {
+          if (!fs.existsSync(dir)) return;
+          const list = fs.readdirSync(dir);
+          for (const item of list) {
+            const fullPath = path.join(dir, item);
+            const stat = fs.statSync(fullPath);
+            if (stat.isDirectory()) {
+              deleteSessionFiles(fullPath);
+            } else if (item.includes(sessionId)) {
+              fs.unlinkSync(fullPath);
+            }
+          }
+        };
+        deleteSessionFiles(sessionsDir);
+      }
+
+      // 4. Delete shell snapshots from ~/.codex/shell_snapshots/
+      const snapshotsDir = path.join(os.homedir(), '.codex', 'shell_snapshots');
+      if (fs.existsSync(snapshotsDir)) {
+        const list = fs.readdirSync(snapshotsDir);
+        for (const item of list) {
+          if (item.startsWith(sessionId)) {
+            fs.unlinkSync(path.join(snapshotsDir, item));
+          }
+        }
+      }
+
+      return true;
+    } catch (e) {
+      console.error('Failed to delete Codex session:', e);
+      throw e;
+    }
+  }
 }
 
 module.exports = new CodexDriver();

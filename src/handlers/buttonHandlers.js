@@ -611,6 +611,40 @@ async function handleThreadControlButton(interaction) {
       content: '🔗 **Select a session to bind/attach to this thread:**',
       components: [row]
     });
+  } else if (action === 'delete-cli-session') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (e) {
+      return;
+    }
+    const meta = getOrInferMetadata(interaction.channel);
+    if (!meta) {
+      return interaction.editReply({ content: '❌ Session metadata not found.' });
+    }
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(meta.tool);
+    const sessions = driver.getAvailableSessions(meta.directory);
+    if (sessions.length === 0) {
+      const displayTool = meta.tool === 'agy' ? 'antigravity' : meta.tool;
+      return interaction.editReply({
+        content: `❌ **No available sessions found** to delete.\n* **Tool:** \`${displayTool.toUpperCase()}\`\n* **Directory:** \`${meta.directory}\``
+      });
+    }
+
+    const { StringSelectMenuBuilder } = require('discord.js');
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`thread-control-select:delete-cli-session:${threadId}`)
+      .setPlaceholder('Select a session to delete...')
+      .addOptions(sessions.map(s => ({
+        label: (s.label || s.description || s.id).substring(0, 100),
+        value: s.id,
+        description: (s.description || s.id).substring(0, 100)
+      })));
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+    await interaction.editReply({
+      content: '🔥 **Select a session to permanently delete from local database/files:**\n*(Warning: This action cannot be undone)*',
+      components: [row]
+    });
   } else if (action === 'change-model') {
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -750,6 +784,43 @@ async function handleThreadControlSelect(interaction) {
         content: `✅ **Model updated successfully!**\n* **Thread Model:** \`${oldModel}\` ➔ \`${newModelDisplay}\``,
         ephemeral: true
       });
+    }
+  } else if (action === 'delete-cli-session') {
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {}
+    const meta = getOrInferMetadata(interaction.channel);
+    if (meta) {
+      const { getDriver } = require('../drivers');
+      const driver = getDriver(meta.tool);
+      if (driver && typeof driver.deleteSession === 'function') {
+        try {
+          driver.deleteSession(selectedSessionId);
+          
+          if (meta.sessionId === selectedSessionId) {
+            delete meta.sessionId;
+            meta.hasStarted = false;
+            threadMetadata.set(interaction.channelId, meta);
+            saveMetadata();
+            await updateThreadControlMessage(interaction.channel, meta);
+          }
+
+          await interaction.followUp({
+            content: `✅ **Session successfully deleted!**\n* **Session ID:** \`${selectedSessionId}\`\nAll database entries, logs, and associated rollout/snapshot files have been permanently removed.`,
+            ephemeral: true
+          });
+        } catch (err) {
+          await interaction.followUp({
+            content: `❌ **Failed to delete session:** ${err.message}`,
+            ephemeral: true
+          });
+        }
+      } else {
+        await interaction.followUp({
+          content: `❌ **Delete operation is not supported** for tool \`${meta.tool.toUpperCase()}\`.`,
+          ephemeral: true
+        });
+      }
     }
   }
 }
@@ -1003,8 +1074,13 @@ function getThreadControlRow(threadId, meta) {
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🤖'),
     new ButtonBuilder()
+      .setCustomId(`thread-control:delete-cli-session:${threadId}`)
+      .setLabel('Delete Session')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔥'),
+    new ButtonBuilder()
       .setCustomId(`thread-control:delete:${threadId}`)
-      .setLabel('Delete')
+      .setLabel('Delete Thread')
       .setStyle(ButtonStyle.Danger)
       .setEmoji('🗑️')
   ];
